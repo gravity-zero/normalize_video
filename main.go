@@ -31,29 +31,41 @@ func main() {
 		extension := fileNameParts[len(fileNameParts)-1]
 		path := filepath.Join(config.ORIGIN_PATH, file.Name())
 
-		if slices.Contains(config.Extensions, extension) {
+		fileInfos, err := os.Stat(path)
+
+		if err != nil {
+			pp.Println("Erreur :", err)
+			continue
+		}
+
+		if slices.Contains(config.Extensions, extension) && fileInfos.Size() > 0 {
 			videos = append(videos, files.NewVideo(filename, path, extension))
 		}
 	}
 
-	var countMovies = 0
-	var countSeries = 0
+	var moviesCount = 0
+	var seriesCount = 0
 
 	for _, video := range videos {
 		if video.Type == "Serie" {
 			serie := files.NewSerie(video)
 			applyTreatment(serie.ActualPath, serie.Normalizer.NewPath, serie.Video.Filename, serie.Video.Extension, serie)
-			countSeries++
+			seriesCount++
 		} else {
 			movie := files.NewMovie(video)
 			applyTreatment(movie.ActualPath, movie.Normalizer.NewPath, movie.Video.Filename, movie.Video.Extension, movie)
-			countMovies++
+			moviesCount++
 		}
 	}
 
-	pp.Println("Movies Treated:", countMovies)
-	pp.Println("Series Treated:", countSeries)
-	pp.Println("Total Video Treated:", countMovies+countSeries)
+	totalCount := moviesCount+seriesCount
+
+	if totalCount > 0 {
+		pp.Println("Movies Treated:", moviesCount)
+		pp.Println("Series Treated:", seriesCount)
+		pp.Println("Total Video Treated:", )
+		pp.Println("________________________________________________________________________________")
+	}
 }
 
 func applyTreatment(actualPath, newPath, filename, extension string, media interface{}){
