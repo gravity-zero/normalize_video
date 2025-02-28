@@ -63,7 +63,7 @@ func main() {
 	if totalCount > 0 {
 		pp.Println("Movies Treated:", moviesCount)
 		pp.Println("Series Treated:", seriesCount)
-		pp.Println("Total Video Treated:", )
+		pp.Println("Total Video Treated:", totalCount)
 		pp.Println("________________________________________________________________________________")
 	}
 }
