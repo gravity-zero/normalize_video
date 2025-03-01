@@ -1,10 +1,10 @@
 package files
 
 import (
-	"regexp"
 	"normalize_video/config"
 	"normalize_video/service"
 	"normalize_video/types"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -12,7 +12,7 @@ import (
 func NewVideo(filename string, filepath string, extension string) *types.Video {
 	newVideo := &types.Video{
 		Filename:   filename,
-		ActualPath: filepath,
+		OriginPath: filepath,
 		Extension:  extension,
 	}
 
