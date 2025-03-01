@@ -1,7 +1,7 @@
 package types
 
 type FileInfos struct {
-	EscapedPath   string
+	MkvFilePath   string
 	MkvTitle      string
 	MkvAudioTrack string
 	MkvSubTrack   string

@@ -13,7 +13,7 @@ import (
 )
 
 func UpdateMkvMetadataTitle(info types.FileInfos) error {
-	cmd := exec.Command("mkvpropedit", info.EscapedPath, "--edit", "info", "--set", fmt.Sprintf("title=%s", info.MkvTitle))
+	cmd := exec.Command("mkvpropedit", info.MkvFilePath, "--edit", "info", "--set", fmt.Sprintf("title=%s", info.MkvTitle))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return pp.Errorf("mkvpropedit error: %v, output: %s", err, string(output))
@@ -27,7 +27,7 @@ func UpdateMkvMetadataTrack(info types.FileInfos, tracks []types.Track, defaultT
 		if track.Properties.Number == defaultTrack.Properties.Number {
 			flag = "1"
 		}
-		cmd := exec.Command("mkvpropedit", info.EscapedPath, "--edit", fmt.Sprintf("track:%d", track.Properties.Number), "--set", "flag-default="+flag)
+		cmd := exec.Command("mkvpropedit", info.MkvFilePath, "--edit", fmt.Sprintf("track:%d", track.Properties.Number), "--set", "flag-default="+flag)
 		if err := cmd.Run(); err != nil {
 			return err
 		}
@@ -40,10 +40,10 @@ func UpdateMkvMetadata(m interface{}) (types.FileInfos, error) {
 
 	switch v := m.(type) {
 	case *types.Serie:
-		info.EscapedPath = v.Normalizer.NewPath
+		info.MkvFilePath = v.Normalizer.NewPath
 		info.MkvTitle = v.Normalizer.Title
 	case *types.Movie:
-		info.EscapedPath = v.Normalizer.NewPath
+		info.MkvFilePath = v.Normalizer.NewPath
 		info.MkvTitle = v.Normalizer.Title
 	default:
 		return info, errors.New("UpdateMkvMetadata: unknown type")
@@ -61,7 +61,7 @@ func UpdateMkvMetadata(m interface{}) (types.FileInfos, error) {
 		return info, err
 	}
 
-	cmd := exec.Command("mkvmerge", "-J", info.EscapedPath)
+	cmd := exec.Command("mkvmerge", "-J", info.MkvFilePath)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {

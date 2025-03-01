@@ -1,6 +1,18 @@
+# Normalize Video
+
+<p><b>Normalize Video</b> is a tool designed to standardize the titles of your videos (movies and series) by reorganizing files from a source folder to a destination folder.</p> 
+
+<p>The goal is to automate this process through scheduled tasks, so you no longer need to perform it manually. TV series are automatically classified by series name and season, with the entire directory structure created on the fly. After processing, a summary table displays all extracted information (language, quality, file extension, etc.) along with the total number of movies/series processed.</p>
+
+<p>If mkvtoolnix is installed, the program will automatically update the video title in the MKV file and set the default audio track and subtitles to French (forcing French if the audio track is in VF). This behavior can be customized as needed.</p>
+
 ## Config
 
-<p>You have to modify the <u>config/constants.go</u> file and change source <b>ORIGIN_PATH</b> and <b>DEST_PATH</b> by your download folder and your wanted destination folder </p>
+<p>In the file <u>config/constants.go</u>, set the following constants:</p>
+<ul>
+    <li><b>ORIGIN_PATH</b> <code>/path/to/source/folder/</code></li>
+    <li><b>DEST_PATH</b> <code>/path/to/destination/folder/</code></li>
+</ul>
 
 ## Install Dependancies
 
@@ -10,7 +22,7 @@ make init
 
 <details>
 
-<summary>Or you can install dependencies by your own</summary>
+<summary>Or install dependencies by your own</summary>
 
 <hr>
 <b><u>mkvtoolnix:</u></b>
