@@ -46,7 +46,7 @@ func UpdateMkvMetadata(m interface{}) (types.FileInfos, error) {
 		info.EscapedPath = v.Normalizer.NewPath
 		info.MkvTitle = v.Normalizer.Title
 	default:
-		return info, errors.New("UpdateMkvMetadata: type inconnu")
+		return info, errors.New("UpdateMkvMetadata: unknown type")
 	}
 
 	installed, err := IsMkvToolInstalled()

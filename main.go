@@ -35,7 +35,7 @@ func main() {
 		fileInfos, err := os.Stat(path)
 
 		if err != nil {
-			pp.Println("Erreur :", err)
+			pp.Println("Error :", err)
 			continue
 		}
 
