@@ -5,12 +5,35 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/olekukonko/tablewriter"
 )
+
+func multiSplit(s string, seps ...string) []string {
+	out := []string{s}
+	for _, sep := range seps {
+		tmp := []string{}
+		for _, part := range out {
+			tmp = append(tmp, strings.Split(part, sep)...)
+		}
+		out = tmp
+	}
+	return out
+}
+
+func SplitFilename(videoFilename string) []string {
+	parts := strings.FieldsFunc(videoFilename, func(r rune) bool {
+		return r == ',' || r == ';' || r == '.' || r == ':' || r == ' ' || r == '-' || r == '_' || r == '(' || r == ')'
+	})
+
+	if len(parts) == 0 {
+		return []string{videoFilename}
+	}
+
+	return parts
+}
 
 func SplitStringFromLastCharacter(toSplit string, separator string) []string {
 	idx := strings.LastIndex(toSplit, separator)
@@ -20,13 +43,13 @@ func SplitStringFromLastCharacter(toSplit string, separator string) []string {
 	return []string{toSplit[:idx], toSplit[idx+len(separator):]}
 }
 
-func FormatFilename(file string) string {
-	re := regexp.MustCompile(`[\(\)\[\]]+`)
-	cleaned := re.ReplaceAllString(file, "")
-	cleaned = strings.ReplaceAll(cleaned, ".", " ")
-	cleaned = strings.ReplaceAll(cleaned, "-", " ")
-	return cleaned
-}
+// func FormatFilename(file string) string {
+// 	re := regexp.MustCompile(`[\(\)\[\]]+`)
+// 	cleaned := re.ReplaceAllString(file, "")
+// 	cleaned = strings.ReplaceAll(cleaned, ".", " ")
+// 	cleaned = strings.ReplaceAll(cleaned, "-", " ")
+// 	return cleaned
+// }
 
 func PrintStructTable(data interface{}) {
 	dataMap := flattenStruct(reflect.ValueOf(data))

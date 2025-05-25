@@ -28,10 +28,7 @@ func NewSerie(video *types.Video) *types.Serie {
 func extractSE(serie *types.Serie) {
 	re, _ := regexp.Compile(config.REGEXSERIES)
 
-	filename := service.SplitStringFromLastCharacter(service.FormatFilename(serie.Video.Filename), ".")
-	splits := strings.Fields(filename[0])
-
-	for _, split := range splits {
+	for _, split := range serie.Video.SplittedFilename {
 		if re.MatchString(split) {
 			serie.SE = strings.ToUpper(split)
 		}

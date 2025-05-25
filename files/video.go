@@ -2,18 +2,17 @@ package files
 
 import (
 	"normalize_video/config"
-	"normalize_video/service"
 	"normalize_video/types"
 	"regexp"
 	"slices"
-	"strings"
 )
 
-func NewVideo(filename string, filepath string, extension string) *types.Video {
+func NewVideo(filename string, fileNameParts []string, filepath string, extension string) *types.Video {
 	newVideo := &types.Video{
-		Filename:   filename,
-		OriginPath: filepath,
-		Extension:  extension,
+		Filename:         filename,
+		SplittedFilename: fileNameParts,
+		OriginPath:       filepath,
+		Extension:        extension,
 	}
 
 	extractInfos(newVideo)
@@ -38,12 +37,10 @@ func getQuality(filenamePart string) bool {
 }
 
 func extractInfos(video *types.Video) {
-	cleaned := service.FormatFilename(video.Filename)
-	splits := strings.Fields(cleaned)
 	video.Type = "Movie" //Default
 	isVideoSerie := false
 
-	for _, split := range splits {
+	for _, split := range video.SplittedFilename {
 		if !isVideoSerie {
 			isVideoSerie = isSerie(split)
 		}

@@ -41,7 +41,7 @@ func UpdateMkvMetadata(m interface{}) (types.FileInfos, error) {
 	switch v := m.(type) {
 	case *types.Serie:
 		info.MkvFilePath = v.Normalizer.NewPath
-		info.MkvTitle = v.Normalizer.Title
+		info.MkvTitle = v.Normalizer.Title + " " + v.SE
 	case *types.Movie:
 		info.MkvFilePath = v.Normalizer.NewPath
 		info.MkvTitle = v.Normalizer.Title

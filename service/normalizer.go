@@ -33,15 +33,7 @@ func NormalizeEscapedNewPath(infos types.Normalizable) {
 }
 
 func NormalizeTitle(infos types.Normalizable) {
-	videoFilename := infos.GetVideo().Filename
-
-	parts := strings.FieldsFunc(videoFilename, func(r rune) bool {
-		return r == ',' || r == ';' || r == '.' || r == ':' || r == ' ' || r == '-'
-	})
-
-	if len(parts) == 0 {
-		return
-	}
+	parts := infos.GetVideo().SplittedFilename
 
 	firstStep := parts
 	if len(parts) > 1 {

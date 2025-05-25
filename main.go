@@ -27,10 +27,10 @@ func main() {
 
 	for _, file := range originFiles {
 		filename := strings.ToLower(file.Name())
-		fileNameParts := strings.Split(filename, ".")
+		fileNameParts := service.SplitFilename(filename)
 
 		extension := fileNameParts[len(fileNameParts)-1]
-		path := filepath.Join(config.ORIGIN_PATH, file.Name())
+		path := filepath.Join(config.ORIGIN_PATH, filename)
 
 		fileInfos, err := os.Stat(path)
 
@@ -40,8 +40,9 @@ func main() {
 		}
 
 		if slices.Contains(config.Extensions, extension) && fileInfos.Size() > 0 {
-			videos = append(videos, files.NewVideo(filename, path, extension))
+			videos = append(videos, files.NewVideo(filename, fileNameParts, path, extension))
 		}
+
 	}
 
 	var wg sync.WaitGroup
@@ -54,12 +55,14 @@ func main() {
 			defer wg.Done()
 			if video.Type == "Serie" {
 				serie := files.NewSerie(video)
+				service.PrintStructTable(serie)
 				processVideos(serie.OriginPath, serie.Normalizer.NewPath, serie.Video.Filename, serie.Video.Extension, serie)
 				mu.Lock()
 				seriesCount++
 				mu.Unlock()
 			} else {
 				movie := files.NewMovie(video)
+				service.PrintStructTable(movie)
 				processVideos(movie.OriginPath, movie.Normalizer.NewPath, movie.Video.Filename, movie.Video.Extension, movie)
 				mu.Lock()
 				moviesCount++
