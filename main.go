@@ -55,14 +55,12 @@ func main() {
 			defer wg.Done()
 			if video.Type == "Serie" {
 				serie := files.NewSerie(video)
-				service.PrintStructTable(serie)
 				processVideos(serie.OriginPath, serie.Normalizer.NewPath, serie.Video.Filename, serie.Video.Extension, serie)
 				mu.Lock()
 				seriesCount++
 				mu.Unlock()
 			} else {
 				movie := files.NewMovie(video)
-				service.PrintStructTable(movie)
 				processVideos(movie.OriginPath, movie.Normalizer.NewPath, movie.Video.Filename, movie.Video.Extension, movie)
 				mu.Lock()
 				moviesCount++
