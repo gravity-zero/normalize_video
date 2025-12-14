@@ -43,14 +43,6 @@ func SplitStringFromLastCharacter(toSplit string, separator string) []string {
 	return []string{toSplit[:idx], toSplit[idx+len(separator):]}
 }
 
-// func FormatFilename(file string) string {
-// 	re := regexp.MustCompile(`[\(\)\[\]]+`)
-// 	cleaned := re.ReplaceAllString(file, "")
-// 	cleaned = strings.ReplaceAll(cleaned, ".", " ")
-// 	cleaned = strings.ReplaceAll(cleaned, "-", " ")
-// 	return cleaned
-// }
-
 func PrintStructTable(data interface{}) {
 	dataMap := flattenStruct(reflect.ValueOf(data))
 
@@ -107,4 +99,18 @@ func MoveFile(origin string, destination string) error {
 		return err
 	}
 	return nil
+}
+
+func Normalize2digits(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > 2 {
+		s = s[len(s)-2:]
+	}
+	if len(s) == 1 {
+		s = "0" + s
+	}
+	if s == "" {
+		return "00"
+	}
+	return s
 }

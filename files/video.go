@@ -21,9 +21,10 @@ func NewVideo(filename string, fileNameParts []string, filepath string, extensio
 }
 
 func isSerie(filenamePart string) bool {
-	re, _ := regexp.Compile(config.REGEXSERIES)
+	re := regexp.MustCompile(config.REGEXSERIES)
+	re2 := regexp.MustCompile(config.REGEXSERIESEXTEND)
 
-	return re.MatchString(filenamePart)
+	return re.MatchString(filenamePart) || re2.MatchString(filenamePart)
 }
 
 func getLanguage(filenamePart string) bool {
@@ -37,7 +38,7 @@ func getQuality(filenamePart string) bool {
 }
 
 func extractInfos(video *types.Video) {
-	video.Type = "Movie" //Default
+	video.Type = "Movie"
 	isVideoSerie := false
 
 	for _, split := range video.SplittedFilename {

@@ -1,9 +1,10 @@
 package config
 
 const (
-    ORIGIN_PATH = ""
-    DEST_PATH = ""
-	REGEXSERIES = `(S|s)(\d\d?)(-){0,1}(E|e)(\d\d?)+`
+    ORIGIN_PATH = "/mnt/e/DDL/"
+    DEST_PATH = "/mnt/e/Cartoon/"
+	REGEXSERIES = `\b[sS]\s*(\d{1,2})\s*[-._ ]*\s*[eE]\s*(\d{1,3})\b`
+    REGEXSERIESEXTEND = `\b(\d{1,2})\s*[xX]\s*(\d{1,3})\b`
 )
 
 var Extensions = []string{"avi", "mkv", "mp4", "mpeg"}

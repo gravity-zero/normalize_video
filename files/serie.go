@@ -1,10 +1,10 @@
 package files
 
 import (
-	"regexp"
 	"normalize_video/config"
 	"normalize_video/service"
 	"normalize_video/types"
+	"regexp"
 	"strings"
 )
 
@@ -27,10 +27,18 @@ func NewSerie(video *types.Video) *types.Serie {
 
 func extractSE(serie *types.Serie) {
 	re, _ := regexp.Compile(config.REGEXSERIES)
-
+	re2, _ := regexp.Compile(config.REGEXSERIESEXTEND)
 	for _, split := range serie.Video.SplittedFilename {
 		if re.MatchString(split) {
 			serie.SE = strings.ToUpper(split)
+			return
+		}
+
+		if m := re2.FindStringSubmatch(split); len(m) >= 3 {
+			season := service.Normalize2digits(m[1])
+			episode := service.Normalize2digits(m[2])
+			serie.SE = "S" + season + "E" + episode
+			return
 		}
 	}
 }

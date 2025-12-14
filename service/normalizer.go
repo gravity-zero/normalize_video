@@ -1,10 +1,12 @@
 package service
 
 import (
-	"regexp"
+	"normalize_video/config"
 	"normalize_video/types"
+	"regexp"
 	"strconv"
 	"strings"
+	"slices"
 )
 
 type NormalizerFunc func(types.Normalizable)
@@ -88,14 +90,20 @@ func getFirstParamIndex(arr []string, infos types.Normalizable) int {
 	knownParams := []string{infos.GetVideo().Quality, infos.GetVideo().Language}
 
 	if infos.GetVideo().Type == "Serie" {
-		knownParams = append(knownParams, strings.ToLower(infos.GetSE()))
+		
 	}
 
 	for i, s := range arr {
-		for _, param := range knownParams {
-			if s == param {
-				return i
+		if infos.GetVideo().Type == "Serie" {
+			knownParams = append(knownParams, strings.ToLower(infos.GetSE()))
+			var reSeries = regexp.MustCompile(config.REGEXSERIES)
+			var reSeriesExtend = regexp.MustCompile(config.REGEXSERIESEXTEND)
+			if reSeries.MatchString(s) || reSeriesExtend.MatchString(s) {
+				knownParams = append(knownParams, strings.ToLower(s))
 			}
+		}
+		if slices.Contains(knownParams, s) {
+			return i
 		}
 	}
 	return 0
@@ -108,28 +116,27 @@ func NormalizeFilename(infos types.Normalizable) {
 	var normalized string
 
 	switch infos.GetVideo().Type {
-	case "Serie":
-		normalized = infos.GetNormalizer().Title + " " + infos.GetSE()
+		case "Serie":
+			normalized = infos.GetNormalizer().Title + " " + infos.GetSE()
 
-		if video.Language != "" {
-			normalized += " - " + strings.ToUpper(video.Language)
-		}
+			if video.Language != "" {
+				normalized += " - " + strings.ToUpper(video.Language)
+			}
 
-		if video.Quality != "" {
-			normalized += " - " + strings.ToUpper(video.Quality)
-		}
+			if video.Quality != "" {
+				normalized += " - " + strings.ToUpper(video.Quality)
+			}
 
-		normalized += "." + ext
-	case "Movie":
-		normalized = infos.GetNormalizer().Title
+		case "Movie":
+			normalized = infos.GetNormalizer().Title
 
-		if video.Quality != "" {
-			normalized += " - " + strings.ToUpper(video.Quality)
-		}
+			if video.Quality != "" {
+				normalized += " - " + strings.ToUpper(video.Quality)
+			}
 
-		normalized += "." + ext
-	default:
-		normalized = infos.GetNormalizer().Title + "." + ext
+		default:
+			normalized = infos.GetNormalizer().Title
 	}
+	normalized += "." + ext
 	infos.SetNormalizeFilename(normalized)
 }
