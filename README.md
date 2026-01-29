@@ -16,8 +16,8 @@ Location: /destination/Movie/Big Buck Bunny - 1080P.mkv
 ### TV Series
 ```
 Before: blender.studio.s01e01.spring.1080p.web.h264.mkv
-After:  Blender Studio S01E01 - WEB - 1080P.mkv
-Location: /destination/Serie/Blender Studio/S01/Blender Studio S01E01 - WEB - 1080P.mkv
+After:  Blender Studio S01E01 - 1080P.mkv
+Location: /destination/Serie/Blender Studio/S01/Blender Studio S01E01 - 1080P.mkv
 ```
 
 ### What Gets Organized
@@ -130,13 +130,6 @@ Total videos processed: 17
           └── Blender Studio S02E01 - 4K.mkv
 ```
 
-### Example 2: Series with Language
-```
-Input:  sintel.s01e01.french.720p.web.mkv
-Output: Sintel S01E01 - FRENCH - 720P.mkv
-Path:   /destination/Serie/Sintel/S01/Sintel S01E01 - FRENCH - 720P.mkv
-```
-
 ## 🎬 Supported Formats
 
 ### Video Extensions
@@ -242,4 +235,5 @@ Check that:
 - File extensions match supported formats
 - Files are not empty (size > 0)
 - Source path is correct in `config/constants.go`
+
 - `RECURSIVE_SCAN` is set appropriately
