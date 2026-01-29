@@ -5,6 +5,9 @@ import (
 	"normalize_video/types"
 	"regexp"
 	"slices"
+	"strings"
+	
+	"golang.org/x/text/language"
 )
 
 func NewVideo(filename string, fileNameParts []string, filepath string, extension string) *types.Video {
@@ -27,13 +30,23 @@ func isSerie(filenamePart string) bool {
 	return re.MatchString(filenamePart) || re2.MatchString(filenamePart)
 }
 
-func getLanguage(filenamePart string) bool {
-
-	return slices.Contains(config.Languages, filenamePart)
+func getLanguage(filenamePart string) (isoCode string, originalTag string) {
+	part := strings.ToLower(filenamePart)
+	
+	if iso, found := config.LanguageTags[part]; found {
+		return iso, part
+	}
+	
+	if len(part) >= 2 && len(part) <= 3 {
+		if _, err := language.Parse(part); err == nil {
+			return part, part
+		}
+	}
+	
+	return "", ""
 }
 
 func getQuality(filenamePart string) bool {
-
 	return slices.Contains(config.Qualities, filenamePart)
 }
 
@@ -41,16 +54,22 @@ func extractInfos(video *types.Video) {
 	video.Type = "Movie"
 	isVideoSerie := false
 
-	for _, split := range video.SplittedFilename {
+	partsToCheck := video.SplittedFilename
+	if len(partsToCheck) > 0 {
+		partsToCheck = partsToCheck[:len(partsToCheck)-1]
+	}
+
+	for _, split := range partsToCheck {
 		if !isVideoSerie {
 			isVideoSerie = isSerie(split)
 		}
 
-		if getLanguage(split) {
-			video.Language = split
+		if isoCode, originalTag := getLanguage(split); isoCode != "" {
+			video.Language = isoCode
+			video.LanguageTag = originalTag
 		}
 
-		if getQuality(split) {
+		if video.Quality == "" && getQuality(split) {
 			video.Quality = split
 		}
 	}

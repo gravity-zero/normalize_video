@@ -75,36 +75,36 @@ func UpdateMkvMetadata(m interface{}) (types.FileInfos, error) {
 
 	var audioTracks, subtitleTracks []types.Track
 	for _, track := range metadata.Tracks {
-		if track.Type == "audio" {
+		switch track.Type {
+		case "audio":
 			audioTracks = append(audioTracks, track)
-		} else if track.Type == "subtitles" {
+		case "subtitles":
 			subtitleTracks = append(subtitleTracks, track)
 		}
 	}
 
-	var frenchAudioTrack *types.Track = GetBestAudioFrenchTrack(audioTracks)
-	var frenchSubTrack *types.Track = GetBestSubtitleFrenchTrack(subtitleTracks)
+	var bestAudioTrack *types.Track = GetBestAudioTrack(audioTracks)
+	var bestSubTrack *types.Track = GetBestSubtitleTrack(subtitleTracks)
 
-	if frenchAudioTrack != nil {
-		if frenchAudioTrack.Properties.TrackName != "" {
-			info.MkvAudioTrack = strings.ToLower(frenchAudioTrack.Properties.TrackName)
+	if bestAudioTrack != nil {
+		if bestAudioTrack.Properties.TrackName != "" {
+			info.MkvAudioTrack = strings.ToLower(bestAudioTrack.Properties.TrackName)
 		} else {
-			info.MkvAudioTrack = strings.ToLower(frenchAudioTrack.Properties.LanguageIetf)
+			info.MkvAudioTrack = strings.ToLower(bestAudioTrack.Properties.LanguageIetf)
 		}
-	}
-
-	if frenchSubTrack != nil && frenchSubTrack.Properties.TrackName != "" {
-		info.MkvSubTrack = strings.ToLower(frenchSubTrack.Properties.TrackName)
-	}
-
-	if frenchAudioTrack != nil {
-		if err := UpdateMkvMetadataTrack(info, audioTracks, frenchAudioTrack); err != nil {
+		
+		if err := UpdateMkvMetadataTrack(info, audioTracks, bestAudioTrack); err != nil {
 			pp.Println("MKV UpdateMkvMetadataTrack AUDIO ERROR")
 			return info, err
 		}
 	}
-	if frenchSubTrack != nil {
-		if err := UpdateMkvMetadataTrack(info, subtitleTracks, frenchSubTrack); err != nil {
+
+	if bestSubTrack != nil {
+		if bestSubTrack.Properties.TrackName != "" {
+			info.MkvSubTrack = strings.ToLower(bestSubTrack.Properties.TrackName)
+		}
+		
+		if err := UpdateMkvMetadataTrack(info, subtitleTracks, bestSubTrack); err != nil {
 			pp.Println("MKV UpdateMkvMetadataTrack SUBTITLE ERROR")
 			return info, err
 		}

@@ -119,8 +119,8 @@ func NormalizeFilename(infos types.Normalizable) {
 		case "Serie":
 			normalized = infos.GetNormalizer().Title + " " + infos.GetSE()
 
-			if video.Language != "" {
-				normalized += " - " + strings.ToUpper(video.Language)
+			if video.LanguageTag != "" {
+				normalized += " - " + strings.ToUpper(video.LanguageTag)
 			}
 
 			if video.Quality != "" {

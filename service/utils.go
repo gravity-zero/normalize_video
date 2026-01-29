@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 
@@ -113,4 +114,70 @@ func Normalize2digits(s string) string {
 		return "00"
 	}
 	return s
+}
+
+func ScanVideoFiles(sourcePath string, recursive bool, extensions []string) ([]string, error) {
+	var videoFiles []string
+
+	if recursive {
+		err := filepath.WalkDir(sourcePath, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+
+			if d.IsDir() {
+				return nil
+			}
+
+			if isValidVideoFile(path, d, extensions) {
+				videoFiles = append(videoFiles, path)
+			}
+
+			return nil
+		})
+
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		entries, err := os.ReadDir(sourcePath)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+
+			path := filepath.Join(sourcePath, entry.Name())
+			if isValidVideoFile(path, entry, extensions) {
+				videoFiles = append(videoFiles, path)
+			}
+		}
+	}
+
+	return videoFiles, nil
+}
+
+func isValidVideoFile(path string, fileInfo os.DirEntry, extensions []string) bool {
+	filename := strings.ToLower(filepath.Base(path))
+	filenameParts := SplitFilename(filename)
+
+	if len(filenameParts) == 0 {
+		return false
+	}
+
+	extension := filenameParts[len(filenameParts)-1]
+
+	if !slices.Contains(extensions, extension) {
+		return false
+	}
+
+	info, err := fileInfo.Info()
+	if err != nil {
+		return false
+	}
+
+	return info.Size() > 0
 }

@@ -6,6 +6,7 @@ type Video struct {
 	SplittedFilename 	[]string
 	OriginPath 			string
 	Language   			string
+	LanguageTag      	string
 	Quality    			string
 	Extension  			string
 }
