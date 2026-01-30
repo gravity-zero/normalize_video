@@ -7,7 +7,6 @@ import (
 	"normalize_video/service"
 	"normalize_video/service/mkvmetadata"
 	"normalize_video/types"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -16,61 +15,37 @@ import (
 )
 
 func main() {
-	videos, err := loadVideos()
-	if err != nil {
-		pp.Printf("Error loading videos: %v\n", err)
-		os.Exit(1)
-	}
-
-	if len(videos) == 0 {
-		pp.Println("No videos found")
-		return
-	}
-
-	stats := processVideosWithWorkerPool(videos, config.MAX_WORKERS)
+	stats := processWithStreaming()
 	printStats(stats)
 }
 
-func loadVideos() ([]*types.Video, error) {
-	videoPaths, err := service.ScanVideoFiles(
-		config.ORIGIN_PATH,
-		config.RECURSIVE_SCAN,
-		config.Extensions,
-	)
-	if err != nil {
-		return nil, err
-	}
+func processWithStreaming() ProcessStats {
+	videoChan := make(chan string, 100)
+	var scanErr error
+	var scanWg sync.WaitGroup
 
-	var videos []*types.Video
-	for _, path := range videoPaths {
-		filename := strings.ToLower(filepath.Base(path))
-		filenameParts := service.SplitFilename(filename)
-		extension := filenameParts[len(filenameParts)-1]
+	scanWg.Add(1)
+	go func() {
+		defer scanWg.Done()
+		scanErr = service.ScanVideoFilesStream(
+			config.ORIGIN_PATH,
+			config.RECURSIVE_SCAN,
+			config.Extensions,
+			videoChan,
+		)
+	}()
 
-		video := files.NewVideo(filename, filenameParts, path, extension)
-		videos = append(videos, video)
-	}
-
-	return videos, nil
-}
-
-type ProcessStats struct {
-	MoviesCount int
-	SeriesCount int
-	Errors      []error
-}
-
-func processVideosWithWorkerPool(videos []*types.Video, numWorkers int) ProcessStats {
-	jobs := make(chan *types.Video, len(videos))
-	var wg sync.WaitGroup
-	var mu sync.Mutex
 	stats := ProcessStats{}
+	var processWg sync.WaitGroup
+	var mu sync.Mutex
 
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
+	workerJobs := make(chan *types.Video, config.MAX_WORKERS)
+
+	for i := 0; i < config.MAX_WORKERS; i++ {
+		processWg.Add(1)
 		go func() {
-			defer wg.Done()
-			for video := range jobs {
+			defer processWg.Done()
+			for video := range workerJobs {
 				err := processVideo(video)
 				mu.Lock()
 				if err != nil {
@@ -87,13 +62,32 @@ func processVideosWithWorkerPool(videos []*types.Video, numWorkers int) ProcessS
 		}()
 	}
 
-	for _, video := range videos {
-		jobs <- video
+	go func() {
+		for path := range videoChan {
+			filename := strings.ToLower(filepath.Base(path))
+			filenameParts := service.SplitFilename(filename)
+			extension := filenameParts[len(filenameParts)-1]
+
+			video := files.NewVideo(filename, filenameParts, path, extension)
+			workerJobs <- video
+		}
+		close(workerJobs)
+	}()
+
+	scanWg.Wait()
+	if scanErr != nil {
+		pp.Printf("Scan error: %v\n", scanErr)
 	}
-	close(jobs)
-	wg.Wait()
+
+	processWg.Wait()
 
 	return stats
+}
+
+type ProcessStats struct {
+	MoviesCount int
+	SeriesCount int
+	Errors      []error
 }
 
 func processVideo(video *types.Video) error {

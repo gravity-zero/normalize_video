@@ -24,6 +24,46 @@ func multiSplit(s string, seps ...string) []string {
 	return out
 }
 
+func ScanVideoFilesStream(sourcePath string, recursive bool, extensions []string, results chan<- string) error {
+	defer close(results)
+
+	if recursive {
+		return filepath.WalkDir(sourcePath, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+
+			if d.IsDir() {
+				return nil
+			}
+
+			if isValidVideoFile(path, d, extensions) {
+				results <- path
+			}
+
+			return nil
+		})
+	}
+
+	entries, err := os.ReadDir(sourcePath)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		path := filepath.Join(sourcePath, entry.Name())
+		if isValidVideoFile(path, entry, extensions) {
+			results <- path
+		}
+	}
+
+	return nil
+}
+
 func SplitFilename(videoFilename string) []string {
 	parts := strings.FieldsFunc(videoFilename, func(r rune) bool {
 		return r == ',' || r == ';' || r == '.' || r == ':' || r == ' ' || r == '-' || r == '_' || r == '(' || r == ')'
