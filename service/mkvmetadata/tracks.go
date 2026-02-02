@@ -5,7 +5,7 @@ import (
 	"normalize_video/types"
 	"regexp"
 	"strings"
-	
+
 	"golang.org/x/text/language"
 )
 
@@ -19,8 +19,6 @@ func findTrackByISO(tracks []types.Track, isoCode string) *types.Track {
 		return nil
 	}
 
-	matcher := language.NewMatcher([]language.Tag{targetLang})
-
 	for _, track := range tracks {
 		langStr := track.Properties.LanguageIetf
 		if langStr == "" {
@@ -32,17 +30,17 @@ func findTrackByISO(tracks []types.Track, isoCode string) *types.Track {
 
 		trackLang, err := language.Parse(langStr)
 		if err != nil {
-			if strings.HasPrefix(strings.ToLower(langStr), strings.ToLower(isoCode)) {
+			if strings.EqualFold(langStr, isoCode) {
 				return &track
 			}
 			continue
 		}
 
-		_, index, _ := matcher.Match(trackLang)
-		if index == 0 {
+		if trackLang.String() == targetLang.String() {
 			return &track
 		}
 	}
+
 	return nil
 }
 
@@ -56,9 +54,7 @@ func filterTracksByISO(tracks []types.Track, isoCode string) []types.Track {
 		return nil
 	}
 
-	matcher := language.NewMatcher([]language.Tag{targetLang})
 	var result []types.Track
-
 	for _, track := range tracks {
 		langStr := track.Properties.LanguageIetf
 		if langStr == "" {
@@ -70,17 +66,17 @@ func filterTracksByISO(tracks []types.Track, isoCode string) []types.Track {
 
 		trackLang, err := language.Parse(langStr)
 		if err != nil {
-			if strings.HasPrefix(strings.ToLower(langStr), strings.ToLower(isoCode)) {
+			if strings.EqualFold(langStr, isoCode) {
 				result = append(result, track)
 			}
 			continue
 		}
 
-		_, index, _ := matcher.Match(trackLang)
-		if index == 0 {
+		if trackLang.String() == targetLang.String() {
 			result = append(result, track)
 		}
 	}
+
 	return result
 }
 
@@ -110,7 +106,7 @@ func GetBestSubtitleTrack(tracks []types.Track) *types.Track {
 	forcedRegex := regexp.MustCompile(`\b(force[ds]?|forc)\b`)
 
 	preferredTracks := filterTracksByISO(tracks, config.PREFERRED_SUBTITLE_LANG)
-	
+
 	for _, track := range preferredTracks {
 		if track.Properties.TrackName != "" {
 			trackName := RemoveAccent(strings.ToLower(track.Properties.TrackName))
