@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"normalize_video/config"
 	"normalize_video/types"
 	"strings"
 
@@ -83,8 +84,16 @@ func UpdateMkvMetadata(m interface{}) (types.FileInfos, error) {
 		}
 	}
 
-	var bestAudioTrack *types.Track = GetBestAudioTrack(audioTracks)
-	var bestSubTrack *types.Track = GetBestSubtitleTrack(subtitleTracks)
+	service := NewMkvService(MkvConfig{
+		PreferredAudioLang:    config.PREFERRED_AUDIO_LANG,
+		FallbackAudioLang:     config.FALLBACK_AUDIO_LANG,
+		PreferredSubtitleLang: config.PREFERRED_SUBTITLE_LANG,
+		FallbackSubtitleLang:  config.FALLBACK_SUBTITLE_LANG,
+		SubtitleForcedOnly:    config.SUBTITLE_FORCED_ONLY,
+	})
+
+	bestAudioTrack := service.GetBestAudioTrack(audioTracks)
+	bestSubTrack := service.GetBestSubtitleTrack(subtitleTracks)
 
 	if bestAudioTrack != nil {
 		if bestAudioTrack.Properties.TrackName != "" {

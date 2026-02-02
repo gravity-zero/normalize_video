@@ -1,11 +1,9 @@
 package mkvmetadata
 
 import (
-	"normalize_video/config"
 	"normalize_video/types"
-	"regexp"
 	"strings"
-
+	
 	"golang.org/x/text/language"
 )
 
@@ -18,6 +16,7 @@ func findTrackByISO(tracks []types.Track, isoCode string) *types.Track {
 	if err != nil {
 		return nil
 	}
+	targetBase, _ := targetLang.Base()
 
 	for _, track := range tracks {
 		langStr := track.Properties.LanguageIetf
@@ -36,7 +35,8 @@ func findTrackByISO(tracks []types.Track, isoCode string) *types.Track {
 			continue
 		}
 
-		if trackLang.String() == targetLang.String() {
+		trackBase, _ := trackLang.Base()
+		if trackBase == targetBase {
 			return &track
 		}
 	}
@@ -53,6 +53,7 @@ func filterTracksByISO(tracks []types.Track, isoCode string) []types.Track {
 	if err != nil {
 		return nil
 	}
+	targetBase, _ := targetLang.Base()
 
 	var result []types.Track
 	for _, track := range tracks {
@@ -72,74 +73,11 @@ func filterTracksByISO(tracks []types.Track, isoCode string) []types.Track {
 			continue
 		}
 
-		if trackLang.String() == targetLang.String() {
+		trackBase, _ := trackLang.Base()
+		if trackBase == targetBase {
 			result = append(result, track)
 		}
 	}
 
 	return result
-}
-
-func GetBestAudioTrack(tracks []types.Track) *types.Track {
-	if len(tracks) == 0 {
-		return nil
-	}
-
-	if track := findTrackByISO(tracks, config.PREFERRED_AUDIO_LANG); track != nil {
-		return track
-	}
-
-	if config.FALLBACK_AUDIO_LANG != "" {
-		if track := findTrackByISO(tracks, config.FALLBACK_AUDIO_LANG); track != nil {
-			return track
-		}
-	}
-
-	return nil
-}
-
-func GetBestSubtitleTrack(tracks []types.Track) *types.Track {
-	if len(tracks) == 0 {
-		return nil
-	}
-
-	forcedRegex := regexp.MustCompile(`\b(force[ds]?|forc)\b`)
-
-	preferredTracks := filterTracksByISO(tracks, config.PREFERRED_SUBTITLE_LANG)
-
-	for _, track := range preferredTracks {
-		if track.Properties.TrackName != "" {
-			trackName := RemoveAccent(strings.ToLower(track.Properties.TrackName))
-			if forcedRegex.MatchString(trackName) {
-				return &track
-			}
-		}
-	}
-
-	if config.SUBTITLE_FORCED_ONLY {
-		if config.FALLBACK_SUBTITLE_LANG != "" {
-			fallbackTracks := filterTracksByISO(tracks, config.FALLBACK_SUBTITLE_LANG)
-			for _, track := range fallbackTracks {
-				if track.Properties.TrackName != "" {
-					trackName := RemoveAccent(strings.ToLower(track.Properties.TrackName))
-					if forcedRegex.MatchString(trackName) {
-						return &track
-					}
-				}
-			}
-		}
-		return nil
-	}
-
-	if len(preferredTracks) > 0 {
-		return &preferredTracks[0]
-	}
-
-	if config.FALLBACK_SUBTITLE_LANG != "" {
-		if track := findTrackByISO(tracks, config.FALLBACK_SUBTITLE_LANG); track != nil {
-			return track
-		}
-	}
-
-	return nil
 }
