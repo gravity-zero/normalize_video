@@ -1,8 +1,8 @@
 package config
 
 const (
-    ORIGIN_PATH = ""
-    DEST_PATH = ""
+    ORIGIN_PATH = "/mnt/e/DDL/"
+    DEST_PATH = "/mnt/e/Cartoon/"
 	RECURSIVE_SCAN = true
 
 	REGEXSERIES = `\b[sS]\s*(\d{1,2})\s*[-._ ]*\s*[eE]\s*(\d{1,3})\b`

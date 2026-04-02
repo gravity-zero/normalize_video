@@ -55,8 +55,10 @@ func NormalizeTitle(infos types.Normalizable) {
 	var cleanedParts string
 	if indexCut > 0 && indexCut <= len(firstStep) {
 		cleanedParts = strings.Join(firstStep[:indexCut], " ")
-	} else if len(firstStep) > 0 {
+	} else if indexCut == 0 && len(firstStep) > 0 {
 		cleanedParts = firstStep[0]
+	} else if len(firstStep) > 0 {
+		cleanedParts = strings.Join(firstStep, " ")
 	}
 
 	cleanedParts = strings.TrimSpace(cleanedParts)
@@ -106,7 +108,7 @@ func getFirstParamIndex(arr []string, infos types.Normalizable) int {
 			return i
 		}
 	}
-	return 0
+	return -1
 }
 
 func NormalizeFilename(infos types.Normalizable) {
