@@ -32,7 +32,6 @@ Location: /destination/Serie/Blender Studio/S01/Blender Studio S01E01 - 1080P.mk
 ## 📋 Prerequisites
 
 - **Go 1.21+** - [Install Go](https://go.dev/doc/install)
-- **mkvtoolnix** (optional) - For MKV metadata updates
 
 ## 🚀 Quick Start
 ```bash
@@ -161,7 +160,8 @@ Multi:      multi
 
 ## 🔧 MKV Metadata Management
 
-When mkvtoolnix is installed:
+MKV metadata is handled natively via [mkvgo](https://github.com/gravity-zero/mkvgo) — no external tools required.
+
 - Updates video title
 - Sets preferred audio track (based on config)
 - Sets preferred subtitle track (forced only by default)
@@ -217,15 +217,6 @@ Path:   /destination/Movie/Movie - 1080P.mkv
 ```
 
 ## 🆘 Troubleshooting
-
-### mkvtoolnix not found
-```bash
-# Ubuntu/Debian
-sudo apt install mkvtoolnix
-
-# macOS
-brew install mkvtoolnix
-```
 
 ### Permission denied errors
 Ensure you have read/write permissions on source and destination folders.

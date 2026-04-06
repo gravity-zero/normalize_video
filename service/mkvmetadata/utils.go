@@ -1,8 +1,6 @@
 package mkvmetadata
 
 import (
-	"os/exec"
-	"strings"
 	"unicode"
 
 	"golang.org/x/text/runes"
@@ -17,17 +15,4 @@ func RemoveAccent(s string) string {
 		return s
 	}
 	return result
-}
-
-func IsMkvToolInstalled() (bool, error) {
-	cmd := exec.Command("sh", "-c", "dpkg -l | grep mkvtoolnix | wc -l")
-	output, err := cmd.Output()
-	if err != nil {
-		return false, err
-	}
-	countStr := strings.TrimSpace(string(output))
-	if countStr != "0" {
-		return true, nil
-	}
-	return false, nil
 }

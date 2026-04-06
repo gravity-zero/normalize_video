@@ -1,3 +1,7 @@
+github.com/gravity-zero/mkvgo v0.0.0-20260406103325-2ef3dda1deb7 h1:Uw3DKcSo+IZBEdqlBGCxIiQzjoOq1Vkrh9ELM0aMuiI=
+github.com/gravity-zero/mkvgo v0.0.0-20260406103325-2ef3dda1deb7/go.mod h1:4ivheVj4T+xX2qa+KZXp7ZOhBASObXu8dvVABjAi5SI=
+github.com/gravity-zero/mkvgo v0.1.0 h1:P3I9J1glpFMXw/BE/EVgmCgIgGUBCSqbzmjxDEuEUKM=
+github.com/gravity-zero/mkvgo v0.1.0/go.mod h1:65fxfjo0hFAlNt0YacAL4aikbhVXHHmORp+Syd7VWe8=
 github.com/k0kubun/colorstring v0.0.0-20150214042306-9440f1994b88 h1:uC1QfSlInpQF+M0ao65imhwqKnz3Q2z/d8PWZRMQvDM=
 github.com/k0kubun/colorstring v0.0.0-20150214042306-9440f1994b88/go.mod h1:3w7q1U84EfirKl04SVQ/s7nPm1ZPhiXd34z40TNz36k=
 github.com/k0kubun/pp v3.0.1+incompatible h1:3tqvf7QgUnZ5tXO6pNAZlrvHgl6DvifjDrd9g2S9Z40=

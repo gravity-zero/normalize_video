@@ -1,40 +1,16 @@
 package mkvmetadata
 
 import (
-	"bytes"
-	"encoding/json"
+	"context"
 	"errors"
-	"fmt"
-	"os/exec"
 	"normalize_video/config"
 	"normalize_video/types"
+	"os"
 	"strings"
 
+	"github.com/gravity-zero/mkvgo/matroska"
 	"github.com/k0kubun/pp"
 )
-
-func UpdateMkvMetadataTitle(info types.FileInfos) error {
-	cmd := exec.Command("mkvpropedit", info.MkvFilePath, "--edit", "info", "--set", fmt.Sprintf("title=%s", info.MkvTitle))
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return pp.Errorf("mkvpropedit error: %v, output: %s", err, string(output))
-	}
-	return nil
-}
-
-func UpdateMkvMetadataTrack(info types.FileInfos, tracks []types.Track, defaultTrack *types.Track) error {
-	for _, track := range tracks {
-		flag := "0"
-		if track.Properties.Number == defaultTrack.Properties.Number {
-			flag = "1"
-		}
-		cmd := exec.Command("mkvpropedit", info.MkvFilePath, "--edit", fmt.Sprintf("track:%d", track.Properties.Number), "--set", "flag-default="+flag)
-		if err := cmd.Run(); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 
 func UpdateMkvMetadata(m interface{}) (types.FileInfos, error) {
 	var info types.FileInfos
@@ -50,36 +26,18 @@ func UpdateMkvMetadata(m interface{}) (types.FileInfos, error) {
 		return info, errors.New("UpdateMkvMetadata: unknown type")
 	}
 
-	installed, err := IsMkvToolInstalled()
+	c, err := matroska.Open(context.Background(), info.MkvFilePath)
 	if err != nil {
-		return info, err
-	}
-	if !installed {
-		return info, errors.New("mkvtoolnix is not installed")
-	}
-
-	if err := UpdateMkvMetadataTitle(info); err != nil {
-		return info, err
-	}
-
-	cmd := exec.Command("mkvmerge", "-J", info.MkvFilePath)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
-		return info, err
-	}
-
-	var metadata types.Metadata
-	if err := json.Unmarshal(out.Bytes(), &metadata); err != nil {
 		return info, err
 	}
 
 	var audioTracks, subtitleTracks []types.Track
-	for _, track := range metadata.Tracks {
-		switch track.Type {
-		case "audio":
+	for _, t := range c.Tracks {
+		track := mkvTrackToType(t)
+		switch t.Type {
+		case matroska.AudioTrack:
 			audioTracks = append(audioTracks, track)
-		case "subtitles":
+		case matroska.SubtitleTrack:
 			subtitleTracks = append(subtitleTracks, track)
 		}
 	}
@@ -95,16 +53,45 @@ func UpdateMkvMetadata(m interface{}) (types.FileInfos, error) {
 	bestAudioTrack := service.GetBestAudioTrack(audioTracks)
 	bestSubTrack := service.GetBestSubtitleTrack(subtitleTracks)
 
+	err = matroska.EditInPlace(context.Background(), info.MkvFilePath, func(c *matroska.Container) {
+		c.Info.Title = info.MkvTitle
+
+		for i := range c.Tracks {
+			switch c.Tracks[i].Type {
+			case matroska.AudioTrack:
+				c.Tracks[i].IsDefault = bestAudioTrack != nil && c.Tracks[i].ID == uint64(bestAudioTrack.Properties.Number)
+			case matroska.SubtitleTrack:
+				c.Tracks[i].IsDefault = bestSubTrack != nil && c.Tracks[i].ID == uint64(bestSubTrack.Properties.Number)
+			}
+		}
+	})
+	if err != nil {
+		pp.Printf("Warning: in-place edit failed, trying full rewrite: %v\n", err)
+		err = matroska.EditMetadata(context.Background(), info.MkvFilePath, info.MkvFilePath+".tmp", func(c *matroska.Container) {
+			c.Info.Title = info.MkvTitle
+			for i := range c.Tracks {
+				switch c.Tracks[i].Type {
+				case matroska.AudioTrack:
+					c.Tracks[i].IsDefault = bestAudioTrack != nil && c.Tracks[i].ID == uint64(bestAudioTrack.Properties.Number)
+				case matroska.SubtitleTrack:
+					c.Tracks[i].IsDefault = bestSubTrack != nil && c.Tracks[i].ID == uint64(bestSubTrack.Properties.Number)
+				}
+			}
+		})
+		if err != nil {
+			return info, err
+		}
+		// replace original with temp
+		if renameErr := rename(info.MkvFilePath+".tmp", info.MkvFilePath); renameErr != nil {
+			return info, renameErr
+		}
+	}
+
 	if bestAudioTrack != nil {
 		if bestAudioTrack.Properties.TrackName != "" {
 			info.MkvAudioTrack = strings.ToLower(bestAudioTrack.Properties.TrackName)
 		} else {
 			info.MkvAudioTrack = strings.ToLower(bestAudioTrack.Properties.LanguageIetf)
-		}
-		
-		if err := UpdateMkvMetadataTrack(info, audioTracks, bestAudioTrack); err != nil {
-			pp.Println("MKV UpdateMkvMetadataTrack AUDIO ERROR")
-			return info, err
 		}
 	}
 
@@ -112,12 +99,23 @@ func UpdateMkvMetadata(m interface{}) (types.FileInfos, error) {
 		if bestSubTrack.Properties.TrackName != "" {
 			info.MkvSubTrack = strings.ToLower(bestSubTrack.Properties.TrackName)
 		}
-		
-		if err := UpdateMkvMetadataTrack(info, subtitleTracks, bestSubTrack); err != nil {
-			pp.Println("MKV UpdateMkvMetadataTrack SUBTITLE ERROR")
-			return info, err
-		}
 	}
 
 	return info, nil
+}
+
+func mkvTrackToType(t matroska.Track) types.Track {
+	return types.Track{
+		Type: string(t.Type),
+		Properties: types.TrackProperties{
+			Number:       int(t.ID),
+			Language:     t.Language,
+			LanguageIetf: t.Language,
+			TrackName:    t.Name,
+		},
+	}
+}
+
+func rename(src, dst string) error {
+	return os.Rename(src, dst)
 }
