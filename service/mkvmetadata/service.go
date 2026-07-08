@@ -40,21 +40,32 @@ func (s *MkvService) GetBestAudioTrack(tracks []types.Track) *types.Track {
 	return nil
 }
 
+var forcedRegex = regexp.MustCompile(`\b(force[ds]?|forc)\b`)
+
+// isForcedTrack reports whether a subtitle track is forced: either the
+// container FlagForced is set, or the track name says so
+func isForcedTrack(track types.Track) bool {
+	if track.Properties.Forced {
+		return true
+	}
+	if track.Properties.TrackName == "" {
+		return false
+	}
+	trackName := RemoveAccent(strings.ToLower(track.Properties.TrackName))
+	return forcedRegex.MatchString(trackName)
+}
+
 func (s *MkvService) GetBestSubtitleTrack(tracks []types.Track) *types.Track {
 	if len(tracks) == 0 {
 		return nil
 	}
 
-	forcedRegex := regexp.MustCompile(`\b(force[ds]?|forc)\b`)
-
 	preferredTracks := filterTracksByISO(tracks, s.config.PreferredSubtitleLang)
 
 	for _, track := range preferredTracks {
-		if track.Properties.TrackName != "" {
-			trackName := RemoveAccent(strings.ToLower(track.Properties.TrackName))
-			if forcedRegex.MatchString(trackName) {
-				return &track
-			}
+		if isForcedTrack(track) {
+			track.Properties.Forced = true
+			return &track
 		}
 	}
 
@@ -62,11 +73,9 @@ func (s *MkvService) GetBestSubtitleTrack(tracks []types.Track) *types.Track {
 		if s.config.FallbackSubtitleLang != "" {
 			fallbackTracks := filterTracksByISO(tracks, s.config.FallbackSubtitleLang)
 			for _, track := range fallbackTracks {
-				if track.Properties.TrackName != "" {
-					trackName := RemoveAccent(strings.ToLower(track.Properties.TrackName))
-					if forcedRegex.MatchString(trackName) {
-						return &track
-					}
+				if isForcedTrack(track) {
+					track.Properties.Forced = true
+					return &track
 				}
 			}
 		}

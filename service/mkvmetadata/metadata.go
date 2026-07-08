@@ -3,32 +3,33 @@ package mkvmetadata
 import (
 	"context"
 	"errors"
+	"fmt"
 	"normalize_video/config"
 	"normalize_video/types"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gravity-zero/mkvgo/matroska"
 	"github.com/k0kubun/pp"
 )
 
-func UpdateMkvMetadata(m interface{}) (types.FileInfos, error) {
-	var info types.FileInfos
+// mkvAnalysis is the read-only part of the pipeline: parsed container, chosen
+// tracks and seek index health. Shared by the real update and the dry-run plan.
+type mkvAnalysis struct {
+	container *matroska.Container
+	bestAudio *types.Track
+	bestSub   *types.Track
+	seekIssue string
+}
 
-	switch v := m.(type) {
-	case *types.Serie:
-		info.MkvFilePath = v.Normalizer.NewPath
-		info.MkvTitle = v.Normalizer.Title + " " + v.SE
-	case *types.Movie:
-		info.MkvFilePath = v.Normalizer.NewPath
-		info.MkvTitle = v.Normalizer.Title
-	default:
-		return info, errors.New("UpdateMkvMetadata: unknown type")
-	}
-
-	c, err := matroska.Open(context.Background(), info.MkvFilePath)
+func analyzeMkv(ctx context.Context, path string) (*mkvAnalysis, error) {
+	c, err := matroska.Open(ctx, path)
 	if err != nil {
-		return info, err
+		if errors.Is(err, matroska.ErrNotMatroska) {
+			return nil, fmt.Errorf("%s is not a real Matroska file (MP4-family container mislabeled as .mkv), left untouched", filepath.Base(path))
+		}
+		return nil, err
 	}
 
 	var audioTracks, subtitleTracks []types.Track
@@ -50,58 +51,194 @@ func UpdateMkvMetadata(m interface{}) (types.FileInfos, error) {
 		SubtitleForcedOnly:    config.SUBTITLE_FORCED_ONLY,
 	})
 
-	bestAudioTrack := service.GetBestAudioTrack(audioTracks)
-	bestSubTrack := service.GetBestSubtitleTrack(subtitleTracks)
+	return &mkvAnalysis{
+		container: c,
+		bestAudio: service.GetBestAudioTrack(audioTracks),
+		bestSub:   service.GetBestSubtitleTrack(subtitleTracks),
+		seekIssue: SeekIndexIssue(c),
+	}, nil
+}
 
-	err = matroska.EditInPlace(context.Background(), info.MkvFilePath, func(c *matroska.Container) {
+// fillTrackInfo reports the chosen tracks in the FileInfos.
+func (a *mkvAnalysis) fillTrackInfo(info *types.FileInfos) {
+	if a.bestAudio != nil {
+		if a.bestAudio.Properties.TrackName != "" {
+			info.MkvAudioTrack = strings.ToLower(a.bestAudio.Properties.TrackName)
+		} else {
+			info.MkvAudioTrack = strings.ToLower(a.bestAudio.Properties.LanguageIetf)
+		}
+	}
+	if a.bestSub != nil && a.bestSub.Properties.TrackName != "" {
+		info.MkvSubTrack = strings.ToLower(a.bestSub.Properties.TrackName)
+	}
+}
+
+func mediaInfo(m interface{}) (types.FileInfos, error) {
+	var info types.FileInfos
+	switch v := m.(type) {
+	case *types.Serie:
+		info.MkvFilePath = v.Normalizer.NewPath
+		info.MkvTitle = v.Normalizer.Title + " " + v.SE
+	case *types.Movie:
+		info.MkvFilePath = v.Normalizer.NewPath
+		info.MkvTitle = v.Normalizer.Title
+	default:
+		return info, errors.New("mkvmetadata: unknown media type")
+	}
+	return info, nil
+}
+
+func UpdateMkvMetadata(m interface{}) (types.FileInfos, error) {
+	info, err := mediaInfo(m)
+	if err != nil {
+		return info, err
+	}
+
+	ctx := context.Background()
+
+	a, err := analyzeMkv(ctx, info.MkvFilePath)
+	if err != nil {
+		return info, err
+	}
+
+	applyEdit := func(c *matroska.Container) {
 		c.Info.Title = info.MkvTitle
 
 		for i := range c.Tracks {
 			switch c.Tracks[i].Type {
 			case matroska.AudioTrack:
-				c.Tracks[i].IsDefault = bestAudioTrack != nil && c.Tracks[i].ID == uint64(bestAudioTrack.Properties.Number)
+				c.Tracks[i].IsDefault = a.bestAudio != nil && c.Tracks[i].ID == uint64(a.bestAudio.Properties.Number)
 			case matroska.SubtitleTrack:
-				c.Tracks[i].IsDefault = bestSubTrack != nil && c.Tracks[i].ID == uint64(bestSubTrack.Properties.Number)
-			}
-		}
-	})
-	if err != nil {
-		pp.Printf("Warning: in-place edit failed, trying full rewrite: %v\n", err)
-		err = matroska.EditMetadata(context.Background(), info.MkvFilePath, info.MkvFilePath+".tmp", func(c *matroska.Container) {
-			c.Info.Title = info.MkvTitle
-			for i := range c.Tracks {
-				switch c.Tracks[i].Type {
-				case matroska.AudioTrack:
-					c.Tracks[i].IsDefault = bestAudioTrack != nil && c.Tracks[i].ID == uint64(bestAudioTrack.Properties.Number)
-				case matroska.SubtitleTrack:
-					c.Tracks[i].IsDefault = bestSubTrack != nil && c.Tracks[i].ID == uint64(bestSubTrack.Properties.Number)
+				isBest := a.bestSub != nil && c.Tracks[i].ID == uint64(a.bestSub.Properties.Number)
+				c.Tracks[i].IsDefault = isBest
+				// A sub selected as forced (by name or flag) gets the real
+				// FlagForced, so players honor it without reading track names
+				if isBest && a.bestSub.Properties.Forced {
+					c.Tracks[i].IsForced = true
 				}
 			}
-		})
-		if err != nil {
+		}
+	}
+
+	if a.seekIssue != "" && config.REPAIR_SEEK_INDEX {
+		// The file needs a rewrite anyway to get its Cues back, and
+		// EditMetadata rebuilds SeekHead + Cues while rewriting: metadata
+		// edit and seek index repair share a single read+write pass
+		if err := fullRewrite(ctx, info.MkvFilePath, applyEdit); err != nil {
 			return info, err
 		}
-		// replace original with temp
-		if renameErr := rename(info.MkvFilePath+".tmp", info.MkvFilePath); renameErr != nil {
-			return info, renameErr
+		info.MkvSeekIndex = "rebuilt (was: " + a.seekIssue + ")"
+	} else {
+		err = matroska.EditInPlace(ctx, info.MkvFilePath, applyEdit)
+		if err != nil {
+			pp.Printf("Warning: in-place edit failed, trying full rewrite: %v\n", err)
+			if err := fullRewrite(ctx, info.MkvFilePath, applyEdit); err != nil {
+				return info, err
+			}
+			a.seekIssue = ""
+		}
+		switch {
+		case a.seekIssue == "":
+			info.MkvSeekIndex = "ok"
+		default:
+			info.MkvSeekIndex = a.seekIssue + " (repair disabled)"
 		}
 	}
 
-	if bestAudioTrack != nil {
-		if bestAudioTrack.Properties.TrackName != "" {
-			info.MkvAudioTrack = strings.ToLower(bestAudioTrack.Properties.TrackName)
-		} else {
-			info.MkvAudioTrack = strings.ToLower(bestAudioTrack.Properties.LanguageIetf)
-		}
-	}
-
-	if bestSubTrack != nil {
-		if bestSubTrack.Properties.TrackName != "" {
-			info.MkvSubTrack = strings.ToLower(bestSubTrack.Properties.TrackName)
-		}
-	}
+	a.fillTrackInfo(&info)
 
 	return info, nil
+}
+
+// PlanMkvMetadata is the dry-run counterpart of UpdateMkvMetadata: it analyzes
+// the file at its CURRENT location (path) read-only and reports what the real
+// run would do, without writing anything.
+func PlanMkvMetadata(m interface{}, path string) (types.FileInfos, error) {
+	info, err := mediaInfo(m)
+	if err != nil {
+		return info, err
+	}
+
+	a, err := analyzeMkv(context.Background(), path)
+	if err != nil {
+		return info, err
+	}
+
+	switch {
+	case a.seekIssue == "":
+		info.MkvSeekIndex = "ok"
+	case config.REPAIR_SEEK_INDEX:
+		info.MkvSeekIndex = "would rebuild (" + a.seekIssue + ")"
+	default:
+		info.MkvSeekIndex = a.seekIssue + " (repair disabled)"
+	}
+
+	a.fillTrackInfo(&info)
+
+	return info, nil
+}
+
+// SeekIndexIssue reports why a file's Cues index hurts seeking (evey scrubbing,
+// VLC arrow keys, HLS segmenting): "" when healthy, otherwise a short reason.
+// Cheap: works from the already-parsed metadata, no cluster scan.
+func SeekIndexIssue(c *matroska.Container) string {
+	videoIDs := map[uint64]bool{}
+	for _, t := range c.Tracks {
+		if t.Type == matroska.VideoTrack {
+			videoIDs[t.ID] = true
+		}
+	}
+	if len(videoIDs) == 0 {
+		return ""
+	}
+
+	if len(c.Cues) == 0 {
+		return "missing Cues"
+	}
+
+	for _, cue := range c.Cues {
+		if !videoIDs[cue.Track] {
+			return "cues keyed on non-video track"
+		}
+	}
+
+	return ""
+}
+
+// fullRewrite rewrites path through EditMetadata (which also rebuilds
+// SeekHead + Cues) into a sibling temp file, then swaps it in atomically.
+// Progress is logged every 25% so long copies stay visible.
+func fullRewrite(ctx context.Context, path string, edit func(*matroska.Container)) error {
+	name := filepath.Base(path)
+	pp.Printf("   %s: rewriting (metadata + seek index)...\n", name)
+
+	tmpPath := path + ".rewrite.tmp"
+	opts := matroska.Options{Progress: progressLogger(name, "rewrite")}
+	if err := matroska.EditMetadata(ctx, path, tmpPath, edit, opts); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
+// progressLogger returns a ProgressFunc logging "<name>: <verb> N%" every 25%.
+func progressLogger(name, verb string) func(processed, total int64) {
+	var lastStep int64
+	return func(processed, total int64) {
+		if total <= 0 {
+			return
+		}
+		if step := processed * 4 / total; step > lastStep {
+			lastStep = step
+			// fmt.Sprintf first: pp.Printf colorizes its args to strings,
+			// which breaks numeric verbs like %d
+			pp.Println(fmt.Sprintf("   %s: %s %d%%", name, verb, step*25))
+		}
+	}
 }
 
 func mkvTrackToType(t matroska.Track) types.Track {
@@ -110,12 +247,9 @@ func mkvTrackToType(t matroska.Track) types.Track {
 		Properties: types.TrackProperties{
 			Number:       int(t.ID),
 			Language:     t.Language,
-			LanguageIetf: t.Language,
+			LanguageIetf: t.LanguageBCP47,
 			TrackName:    t.Name,
+			Forced:       t.IsForced,
 		},
 	}
-}
-
-func rename(src, dst string) error {
-	return os.Rename(src, dst)
 }

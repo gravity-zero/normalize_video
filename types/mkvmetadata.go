@@ -5,6 +5,7 @@ type FileInfos struct {
 	MkvTitle      string
 	MkvAudioTrack string
 	MkvSubTrack   string
+	MkvSeekIndex  string
 }
 
 type Metadata struct {
@@ -21,4 +22,5 @@ type TrackProperties struct {
 	LanguageIetf string `json:"language_ietf"`
 	Language     string `json:"language"`
 	TrackName    string `json:"track_name"`
+	Forced       bool   `json:"forced"`
 }
