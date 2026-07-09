@@ -23,6 +23,9 @@ import (
 // interleave their tables. Single-line progress logs stay unserialized.
 var printMu sync.Mutex
 
+// dedupIndex maps content fingerprints to library paths; nil unless -dedup.
+var dedupIndex *service.DedupIndex
+
 func main() {
 	config.ParseFlags()
 
@@ -31,6 +34,15 @@ func main() {
 		os.Exit(1)
 	}
 	defer service.CloseJournal()
+
+	if config.DEDUP {
+		idx, err := service.LoadDedupIndex(filepath.Join(config.DEST_PATH, ".normalize_fingerprints.jsonl"))
+		if err != nil {
+			pp.Printf("Error loading dedup index: %v\n", err)
+			os.Exit(1)
+		}
+		dedupIndex = idx
+	}
 
 	if config.DRY_RUN {
 		pp.Println("DRY RUN: showing the plan, nothing will be modified")
@@ -209,6 +221,8 @@ type ProcessStats struct {
 	Converted         int
 	Skipped           int
 	Hashed            int
+	Salvaged          int
+	Duplicates        int
 	JunkRemoved       int
 	DirsRemoved       int
 	Errors            []error
@@ -226,6 +240,8 @@ type mediaResult struct {
 	Converted         bool
 	Skipped           bool
 	Hashed            bool
+	Salvaged          bool
+	Duplicate         bool
 	SourceDir         string
 	// PlannedGone lists files a dry-run pretends were moved/consumed, so the
 	// cleanup preview matches what a real run would leave behind
@@ -264,6 +280,12 @@ func collectResult(stats *ProcessStats, mu *sync.Mutex, video *types.Video, res 
 	}
 	if res.Hashed {
 		stats.Hashed++
+	}
+	if res.Salvaged {
+		stats.Salvaged++
+	}
+	if res.Duplicate {
+		stats.Duplicates++
 	}
 	stats.SubtitlesMerged += res.SubtitlesMerged
 }
@@ -385,12 +407,34 @@ func processMedia(media types.Normalizable) (mediaResult, error) {
 		}
 
 		result, err := mkvmetadata.UpdateMkvMetadata(media)
+		if err != nil && config.SALVAGE && !mkvmetadata.IsNotMatroska(err) {
+			// Last resort: the normal path refused the file, keep what is
+			// playable and retry once
+			pp.Printf("Warning: MKV processing failed for %s: %v\n", filepath.Base(newPath), err)
+			report, serr := mkvmetadata.SalvageFile(ctx, newPath)
+			if serr != nil {
+				service.Journal("salvage", newPath, "", "failed", serr.Error())
+			} else {
+				res.Salvaged = true
+				service.Journal("salvage", newPath, "", "done",
+					fmt.Sprintf("%d cluster(s) kept, %d byte(s) skipped, %d damaged range(s)",
+						report.ClustersCopied, report.BytesSkipped, len(report.DamagedRanges)))
+				result, err = mkvmetadata.UpdateMkvMetadata(media)
+			}
+		}
 		if err != nil {
 			pp.Printf("Warning: MKV metadata update failed for %s: %v\n", filepath.Base(newPath), err)
 		} else {
 			res.SeekIndexRepaired = strings.HasPrefix(result.MkvSeekIndex, "rebuilt")
 			if res.SeekIndexRepaired {
 				service.Journal("repair", newPath, "", "done", result.MkvSeekIndex)
+			}
+			if config.PLAYABILITY_TARGET != "" {
+				if verdict, perr := mkvmetadata.CheckPlayability(ctx, newPath, config.PLAYABILITY_TARGET); perr != nil {
+					pp.Printf("Warning: playability check failed for %s: %v\n", filepath.Base(newPath), perr)
+				} else {
+					result.MkvPlayability = verdict
+				}
 			}
 			setMkvMetadata(media, result)
 		}
@@ -401,6 +445,10 @@ func processMedia(media types.Normalizable) (mediaResult, error) {
 			} else {
 				res.Hashed = true
 				service.Journal("hash", newPath, "", "done", "CONTENT_SHA256 written")
+
+				if dedupIndex != nil {
+					checkDuplicate(ctx, media, newPath, &res)
+				}
 			}
 		}
 	}
@@ -444,6 +492,11 @@ func dryRunMedia(media types.Normalizable, originPath, newPath, extension string
 			if res.SeekIndexRepaired {
 				service.Journal("repair", newPath, "", "planned", result.MkvSeekIndex)
 			}
+			if config.PLAYABILITY_TARGET != "" {
+				if verdict, perr := mkvmetadata.CheckPlayability(context.Background(), originPath, config.PLAYABILITY_TARGET); perr == nil {
+					result.MkvPlayability = verdict
+				}
+			}
 			setMkvMetadata(media, result)
 		}
 
@@ -456,6 +509,34 @@ func dryRunMedia(media types.Normalizable, originPath, newPath, extension string
 	printMediaTable(media)
 
 	return res, nil
+}
+
+// checkDuplicate flags a freshly hashed file whose content (identical track
+// payloads, whatever the filename/metadata/track order) is already in the
+// library. Report-only: the duplicate is named in the table and the journal,
+// nothing is deleted.
+func checkDuplicate(ctx context.Context, media types.Normalizable, path string, res *mediaResult) {
+	fp, err := mkvmetadata.FingerprintFile(ctx, path)
+	if err != nil || fp == "" {
+		return
+	}
+
+	if existing, ok := dedupIndex.Lookup(fp); ok && existing != path {
+		pp.Printf("   %s: same content as %s\n", filepath.Base(path), existing)
+		service.Journal("duplicate", path, existing, "detected", "identical track payloads (fingerprint match)")
+		res.Duplicate = true
+		switch v := media.(type) {
+		case *types.Serie:
+			v.MkvMetadata.MkvDuplicateOf = existing
+		case *types.Movie:
+			v.MkvMetadata.MkvDuplicateOf = existing
+		}
+		return
+	}
+
+	if err := dedupIndex.Add(fp, path); err != nil {
+		pp.Printf("Warning: dedup index write failed: %v\n", err)
+	}
 }
 
 func setMkvMetadata(media types.Normalizable, result types.FileInfos) {
@@ -508,6 +589,12 @@ func printStats(stats ProcessStats, elapsed time.Duration) {
 	}
 	if stats.Hashed > 0 {
 		pp.Println("Files hashed:", stats.Hashed)
+	}
+	if stats.Salvaged > 0 {
+		pp.Println("Damaged files salvaged:", stats.Salvaged)
+	}
+	if stats.Duplicates > 0 {
+		pp.Println("Content duplicates detected:", stats.Duplicates)
 	}
 	if stats.JunkRemoved > 0 || stats.DirsRemoved > 0 {
 		pp.Println("Cleanup: junk files:", stats.JunkRemoved, "- dirs:", stats.DirsRemoved)

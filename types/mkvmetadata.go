@@ -1,11 +1,13 @@
 package types
 
 type FileInfos struct {
-	MkvFilePath   string
-	MkvTitle      string
-	MkvAudioTrack string
-	MkvSubTrack   string
-	MkvSeekIndex  string
+	MkvFilePath    string
+	MkvTitle       string
+	MkvAudioTrack  string
+	MkvSubTrack    string
+	MkvSeekIndex   string
+	MkvPlayability string
+	MkvDuplicateOf string
 }
 
 type Metadata struct {

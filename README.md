@@ -77,6 +77,15 @@ everything else is overridable from the command line:
                          (default: historical silent overwrite)
   --journal PATH         append one JSON line per operation (move, repair,
                          merge, convert, hash, cleanup) to PATH    (default off)
+  --playability PROFILE  report direct-play / remux / transcode per file
+                         against a playback profile (chrome, safari, firefox,
+                         chromecast-gen3, ...) - head-only read   (default off)
+  --salvage              last-resort recovery of structurally damaged files:
+                         keep the intact clusters, skip the damaged spans
+                         (journaled), retry the pipeline once      (default off)
+  --dedup                flag imports whose content (identical track payloads,
+                         whatever the name/metadata/track order) is already in
+                         the library - report-only, implies --hashes (default off)
 ```
 
 MKV language preferences (compile-time, `config/constants.go`):
@@ -112,8 +121,11 @@ For every `.mkv`, in addition to renaming:
 - **Seek index**: files with a missing Cues index, or cues keyed on a non-video track, are reindexed (`MkvSeekIndex` reports `ok` or `rebuilt (...)`). Without this, seeking/scrubbing is broken or imprecise in most players
 - **Mislabeled files**: a `.mkv` that is really an MP4-family container is detected and skipped with a clear warning instead of corrupting it
 - **Subtitle sidecars** (opt-in, `MERGE_SUBTITLE_SIDECARS`): external `movie.srt` / `movie.fr.srt` / `movie.fr.forced.ass` files are embedded into the MKV with the right language and forced flag, then deleted - the library stays self-contained
+- **Playability report** (opt-in, `--playability chrome`): each file gets a direct-play / remux / transcode verdict against a real browser/device profile, with the blocking tracks named - you know at import time what your media server will have to transcode
+- **Salvage** (opt-in, `--salvage`): a structurally damaged file (bad sector, truncated download) that the normal pipeline refuses gets a best-effort recovery - intact clusters kept verbatim, damaged spans skipped and journaled, index rebuilt - then goes through the pipeline again
+- **Duplicate detection** (opt-in, `--dedup`): each import's content identity (the mkvgo Fingerprint, rebuilt for free from the `CONTENT_SHA256` tags `--hashes` writes) is checked against the library index (`DEST/.normalize_fingerprints.jsonl`). A re-mux or renamed copy of something you already have gets flagged in the table (`MkvDuplicateOf`) and the journal - never deleted, you decide
 
-Metadata edits are done in place (instant, no file copy). When the seek index must be rebuilt, the metadata edit and the reindex share a single read+write pass (one file copy, progress logged every 25%). Set `REPAIR_SEEK_INDEX = false` to skip the copy entirely (`MkvSeekIndex` then reports the issue instead of fixing it).
+Metadata edits are done in place (instant, no file copy). The seek index repair is also in place: the new Cues element is appended inside the Segment and the SeekHead repointed, cluster bytes untouched - one read pass, no copy, crash-safe (in-file journal, verified, rolled back on any failure). A full rewrite only happens as fallback. Set `--repair-index=false` to only report the issue instead of fixing it.
 
 ### Cleanup safety rules (`--cleanup`)
 

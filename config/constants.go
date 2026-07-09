@@ -37,7 +37,8 @@ var (
 	WATCH_INTERVAL_SECONDS = 30
 
 	// Rebuild the Cues index of MKV files that lack one (broken seeking in
-	// players). Only affected files pay the cost: a full file copy
+	// players). Repair is in place (one read pass, no file copy, crash-safe);
+	// a full rewrite only happens as fallback
 	REPAIR_SEEK_INDEX = true
 
 	// Embed subtitle sidecars (movie.srt, movie.fr.srt, movie.fr.forced.ass)
@@ -65,6 +66,23 @@ var (
 	// Append one JSON line per operation (move, repair, merge, convert...)
 	// to this file. Empty = disabled
 	JOURNAL_PATH = ""
+
+	// Evaluate each MKV against a playback capability profile (chrome,
+	// safari, firefox, chromecast-gen3, ...) and report direct-play / remux /
+	// transcode per file. Head-only read, virtually free. Empty = disabled
+	PLAYABILITY_TARGET = ""
+
+	// Last-resort recovery of structurally damaged files: when the normal
+	// MKV processing fails, copy what is salvageable (skipping the damaged
+	// spans, logged in the journal) and retry once. Lossy by nature - the
+	// damaged parts are already unplayable. Off by default
+	SALVAGE = false
+
+	// Detect content duplicates at import (same tracks re-muxed, renamed or
+	// re-tagged) via the mkvgo Fingerprint identity computed from the
+	// CONTENT_SHA256 tags. Report-only: duplicates are flagged, never
+	// deleted. Implies -hashes. Off by default
+	DEDUP = false
 )
 
 var collisionModes = map[string]bool{"": true, "skip": true, "replace": true, "suffix": true}
@@ -85,7 +103,15 @@ func ParseFlags() {
 	flag.BoolVar(&CLEANUP_SOURCE, "cleanup", CLEANUP_SOURCE, "delete junk files and empty folders from emptied source dirs")
 	flag.StringVar(&ON_COLLISION, "on-collision", ON_COLLISION, "when destination exists: skip, replace or suffix (default: overwrite)")
 	flag.StringVar(&JOURNAL_PATH, "journal", JOURNAL_PATH, "append one JSON line per operation to this file")
+	flag.StringVar(&PLAYABILITY_TARGET, "playability", PLAYABILITY_TARGET, "report direct-play/remux/transcode against a profile (chrome, safari, firefox, chromecast-gen3, ...)")
+	flag.BoolVar(&SALVAGE, "salvage", SALVAGE, "last-resort recovery of damaged files (lossy: damaged spans are skipped)")
+	flag.BoolVar(&DEDUP, "dedup", DEDUP, "flag content duplicates at import (report-only, implies -hashes)")
 	flag.Parse()
+
+	if DEDUP {
+		// the fingerprint is derived from the CONTENT_SHA256 tags
+		WRITE_CONTENT_HASHES = true
+	}
 
 	if !collisionModes[ON_COLLISION] {
 		fmt.Fprintf(os.Stderr, "invalid -on-collision value %q (want skip, replace or suffix)\n", ON_COLLISION)

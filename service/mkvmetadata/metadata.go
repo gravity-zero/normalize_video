@@ -27,7 +27,7 @@ func analyzeMkv(ctx context.Context, path string) (*mkvAnalysis, error) {
 	c, err := matroska.Open(ctx, path)
 	if err != nil {
 		if errors.Is(err, matroska.ErrNotMatroska) {
-			return nil, fmt.Errorf("%s is not a real Matroska file (MP4-family container mislabeled as .mkv), left untouched", filepath.Base(path))
+			return nil, fmt.Errorf("%s is not a real Matroska file (MP4-family container mislabeled as .mkv), left untouched: %w", filepath.Base(path), err)
 		}
 		return nil, err
 	}
@@ -120,30 +120,44 @@ func UpdateMkvMetadata(m interface{}) (types.FileInfos, error) {
 		}
 	}
 
-	if a.seekIssue != "" && config.REPAIR_SEEK_INDEX {
-		// The file needs a rewrite anyway to get its Cues back, and
-		// EditMetadata rebuilds SeekHead + Cues while rewriting: metadata
-		// edit and seek index repair share a single read+write pass
-		if err := fullRewrite(ctx, info.MkvFilePath, applyEdit); err != nil {
-			return info, err
+	seekStatus := "ok"
+	needEdit := true
+
+	if a.seekIssue != "" {
+		if !config.REPAIR_SEEK_INDEX {
+			seekStatus = a.seekIssue + " (repair disabled)"
+		} else if err := reindexInPlace(ctx, info.MkvFilePath, a.seekIssue); err == nil {
+			// Surgical repair: Cues appended, SeekHead repointed, cluster
+			// bytes untouched - one read pass, no file copy. Crash-safe
+			// (in-file journal, verified before commit)
+			seekStatus = "rebuilt in place (was: " + a.seekIssue + ")"
+		} else {
+			// Fallback: full rewrite. EditMetadata rebuilds SeekHead + Cues
+			// while rewriting, so metadata edit and repair share the pass
+			if errors.Is(err, matroska.ErrIndexNotHeadDiscoverable) {
+				// expected for some layouts, not an error: the file was
+				// rolled back byte-identical and the copy path handles it
+				pp.Printf("   %s: layout cannot hold a head-discoverable index, full rewrite instead\n", filepath.Base(info.MkvFilePath))
+			} else {
+				pp.Printf("Warning: in-place reindex failed, falling back to full rewrite: %v\n", err)
+			}
+			if err := fullRewrite(ctx, info.MkvFilePath, applyEdit); err != nil {
+				return info, err
+			}
+			seekStatus = "rebuilt (was: " + a.seekIssue + ")"
+			needEdit = false
 		}
-		info.MkvSeekIndex = "rebuilt (was: " + a.seekIssue + ")"
-	} else {
-		err = matroska.EditInPlace(ctx, info.MkvFilePath, applyEdit)
-		if err != nil {
+	}
+
+	if needEdit {
+		if err := matroska.EditInPlace(ctx, info.MkvFilePath, applyEdit); err != nil {
 			pp.Printf("Warning: in-place edit failed, trying full rewrite: %v\n", err)
 			if err := fullRewrite(ctx, info.MkvFilePath, applyEdit); err != nil {
 				return info, err
 			}
-			a.seekIssue = ""
-		}
-		switch {
-		case a.seekIssue == "":
-			info.MkvSeekIndex = "ok"
-		default:
-			info.MkvSeekIndex = a.seekIssue + " (repair disabled)"
 		}
 	}
+	info.MkvSeekIndex = seekStatus
 
 	a.fillTrackInfo(&info)
 
@@ -178,6 +192,13 @@ func PlanMkvMetadata(m interface{}, path string) (types.FileInfos, error) {
 	return info, nil
 }
 
+// IsNotMatroska reports whether err means the file is not a real Matroska
+// container (e.g. an MP4 mislabeled as .mkv) - a case salvage/retry logic
+// must leave alone.
+func IsNotMatroska(err error) bool {
+	return errors.Is(err, matroska.ErrNotMatroska)
+}
+
 // SeekIndexIssue reports why a file's Cues index hurts seeking (evey scrubbing,
 // VLC arrow keys, HLS segmenting): "" when healthy, otherwise a short reason.
 // Cheap: works from the already-parsed metadata, no cluster scan.
@@ -203,6 +224,16 @@ func SeekIndexIssue(c *matroska.Container) string {
 	}
 
 	return ""
+}
+
+// reindexInPlace patches the file itself through matroska.ReindexInPlace: the
+// new Cues element is appended inside the Segment and the SeekHead repointed,
+// without moving cluster bytes - one read pass, no file copy, crash-safe
+// (in-file journal + verification, rollback on any failure).
+func reindexInPlace(ctx context.Context, path, issue string) error {
+	name := filepath.Base(path)
+	pp.Printf("   %s: %s, rebuilding seek index in place...\n", name, issue)
+	return matroska.ReindexInPlace(ctx, path, matroska.Options{Progress: progressLogger(name, "reindex")})
 }
 
 // fullRewrite rewrites path through EditMetadata (which also rebuilds

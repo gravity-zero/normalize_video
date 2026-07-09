@@ -4,6 +4,60 @@ All notable changes to normalize_video are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/), and the project
 follows [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-07-09
+
+**Highlights**
+
+- **In-place seek index repair** - the Cues rebuild no longer copies the file:
+  the new index is appended inside the Segment and the SeekHead repointed,
+  cluster bytes untouched. One read pass instead of a read+write of the whole
+  file (was ~2 min per large file on a WSL drive mount, now roughly half).
+- **Playability report** (`--playability chrome`) - know at import time what
+  will direct-play, remux or transcode on the target player, virtually free.
+- **Salvage** (`--salvage`) - damaged files are recovered instead of failed.
+- **Duplicate detection** (`--dedup`) - a re-mux or renamed copy of content
+  already in the library is flagged at import, for free on hashed files.
+
+### Added
+
+- **`--playability PROFILE`** (off by default): every processed MKV gets a
+  direct-play / remux / transcode verdict against a playback capability
+  profile (chrome, safari, firefox, chromecast-gen3, ...), with the blocking
+  tracks and reasons named (`MkvPlayability` in the per-file table). Head-only
+  metadata read, no decode - virtually free. Also reported in `--dry-run`.
+- **`--salvage`** (off by default): when the normal MKV processing fails on a
+  structurally damaged file (bad sector, truncated download), the intact
+  metadata and clusters are carried over verbatim, damaged spans are skipped
+  (listed in the journal: clusters kept, bytes skipped, damaged ranges), the
+  seek index is rebuilt and the pipeline retries once. Mislabeled non-Matroska
+  files are excluded from salvage.
+- **`--dedup`** (off by default, implies `--hashes`): every import's
+  content-identity hash (the mkvgo Fingerprint "Presentation": per-track
+  payload digests, sorted content-wise, so filename/metadata/track order do
+  not matter) is checked against `DEST/.normalize_fingerprints.jsonl` and
+  recorded there. The hash is rebuilt from the `CONTENT_SHA256` tags written
+  at import - one metadata read, no extra media scan (verified byte-identical
+  to the full-read `matroska.Fingerprint` in tests). Duplicates are
+  report-only: `MkvDuplicateOf` in the per-file table, a `duplicate` journal
+  line, a summary count - nothing is deleted.
+
+### Changed
+
+- Seek index repair uses `matroska.ReindexInPlace` (mkvgo): surgical, needs
+  write access to the file only, crash-safe - every byte about to be
+  overwritten is journaled inside the file first, the result is verified
+  (head-only) while the journal still allows a rollback, and an interrupted
+  run self-recovers on the next attempt. The previous single-pass full
+  rewrite (`EditMetadata`) remains as automatic fallback, and still handles
+  the in-place metadata edit overflow case.
+- `MkvSeekIndex` reports `rebuilt in place (was: ...)` for the new path;
+  `rebuilt (was: ...)` still means the full-rewrite fallback ran.
+- A file whose layout cannot hold a head-discoverable index
+  (`ErrIndexNotHeadDiscoverable`) falls back to the full rewrite with an
+  informational note instead of a warning - it is an expected layout case,
+  and the in-place attempt rolls back byte-identical.
+- mkvgo upgraded v0.16.0 -> v0.17.0.
+
 ## [0.1.0] - 2026-07-08
 
 First tagged release.
