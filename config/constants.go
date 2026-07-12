@@ -75,8 +75,22 @@ var (
 	// Last-resort recovery of structurally damaged files: when the normal
 	// MKV processing fails, copy what is salvageable (skipping the damaged
 	// spans, logged in the journal) and retry once. Lossy by nature - the
-	// damaged parts are already unplayable. Off by default
+	// damaged parts are already unplayable. Since mkvgo 0.21 a diagnosed
+	// damaged cluster stream is first repaired surgically (resync rewrite:
+	// lying sizes fixed losslessly, damage cut around block by block, video
+	// clean-cut to the next keyframe, result deep-verified before the atomic
+	// swap); the uncapped best-effort salvage only runs when that surgical
+	// repair refuses (mostly-damaged source). A truncated tail is reported
+	// as "re-download advised": no tool can restore bytes that were never
+	// written. Off by default
 	SALVAGE = false
+
+	// Cancel a diagnosed constant A/V start desync (audio content starting
+	// >=100ms after the video, the classic repack defect) by shifting the
+	// audio blocks - mkvgo picks between a crash-safe in-place 2-byte patch
+	// and a verified rewrite, and deep-verifies the result. Off by default:
+	// it rewrites timing; without the flag the delay is only reported
+	RETIME = false
 
 	// Detect content duplicates at import (same tracks re-muxed, renamed or
 	// re-tagged) via the mkvgo Fingerprint identity computed from the
@@ -104,7 +118,8 @@ func ParseFlags() {
 	flag.StringVar(&ON_COLLISION, "on-collision", ON_COLLISION, "when destination exists: skip, replace or suffix (default: overwrite)")
 	flag.StringVar(&JOURNAL_PATH, "journal", JOURNAL_PATH, "append one JSON line per operation to this file")
 	flag.StringVar(&PLAYABILITY_TARGET, "playability", PLAYABILITY_TARGET, "report direct-play/remux/transcode against a profile (chrome, safari, firefox, chromecast-gen3, ...)")
-	flag.BoolVar(&SALVAGE, "salvage", SALVAGE, "last-resort recovery of damaged files (lossy: damaged spans are skipped)")
+	flag.BoolVar(&SALVAGE, "salvage", SALVAGE, "repair damaged files (surgical resync first, best-effort salvage as last resort)")
+	flag.BoolVar(&RETIME, "retime", RETIME, "cancel a diagnosed A/V start desync by shifting the audio blocks")
 	flag.BoolVar(&DEDUP, "dedup", DEDUP, "flag content duplicates at import (report-only, implies -hashes)")
 	flag.Parse()
 

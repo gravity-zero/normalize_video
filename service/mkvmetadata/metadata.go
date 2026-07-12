@@ -15,11 +15,13 @@ import (
 )
 
 // mkvAnalysis is the read-only part of the pipeline: parsed container, chosen
-// tracks and seek index health. Shared by the real update and the dry-run plan.
+// tracks and the mkvgo triage (seek index health, cluster-stream damage,
+// audio start delays). Shared by the real update and the dry-run plan.
 type mkvAnalysis struct {
 	container *matroska.Container
 	bestAudio *types.Track
 	bestSub   *types.Track
+	diag      *matroska.Diagnosis
 	seekIssue string
 }
 
@@ -51,12 +53,74 @@ func analyzeMkv(ctx context.Context, path string) (*mkvAnalysis, error) {
 		SubtitleForcedOnly:    config.SUBTITLE_FORCED_ONLY,
 	})
 
-	return &mkvAnalysis{
+	a := &mkvAnalysis{
 		container: c,
 		bestAudio: service.GetBestAudioTrack(audioTracks),
 		bestSub:   service.GetBestSubtitleTrack(subtitleTracks),
-		seekIssue: SeekIndexIssue(c),
-	}, nil
+	}
+
+	// One-call triage: index health (head-only), audio start delays (first
+	// clusters), declared-size coherence; the tolerant damage walk runs only
+	// when the sizes disagree. Every finding names its remedy, which is what
+	// routes the repairs below.
+	diag, derr := matroska.Diagnose(ctx, path)
+	if derr != nil {
+		// triage must never block the pipeline: fall back to the local
+		// index heuristic; damage stays undetected until an operation trips
+		pp.Printf("Warning: diagnose failed for %s, using head-only index check: %v\n", filepath.Base(path), derr)
+		a.seekIssue = SeekIndexIssue(c)
+		return a, nil
+	}
+	a.diag = diag
+	a.seekIssue = seekIssueFrom(diag)
+	return a, nil
+}
+
+// seekIssueFrom maps the diagnosis' index findings to the short reasons the
+// per-file table and the journal have always shown. Files without a video
+// track are exempt, like SeekIndexIssue: their cues legitimately key on audio.
+func seekIssueFrom(d *matroska.Diagnosis) string {
+	if d.CueHealth != nil && !d.CueHealth.HasVideoTrack {
+		return ""
+	}
+	for _, f := range d.Findings {
+		switch f.Kind {
+		case "no-index":
+			return "missing Cues"
+		case "index-misskeyed":
+			return "cues keyed on non-video track"
+		case "index-stale-tracks":
+			return "cues referencing stale tracks"
+		}
+	}
+	return ""
+}
+
+// finding returns the first diagnosis finding of the given kind, nil when the
+// triage did not run or found nothing of that kind.
+func (a *mkvAnalysis) finding(kind string) *matroska.Finding {
+	return findingOf(a.diag, kind)
+}
+
+// damageFinding returns the finding that calls for a cluster-stream repair
+// (a truncated source or mid-file damage), nil when the stream is intact.
+func (a *mkvAnalysis) damageFinding() *matroska.Finding {
+	if f := a.finding("truncated"); f != nil {
+		return f
+	}
+	return a.finding("damaged")
+}
+
+// audioShifts returns the retime map cancelling every diagnosed audio start
+// delay (track -> negative shift in ns), empty when A/V start together.
+func (a *mkvAnalysis) audioShifts() map[uint64]int64 {
+	return audioShiftsOf(a.diag)
+}
+
+// audioDelayText describes the diagnosed start delays, deterministically
+// ordered ("track 2 starts 350ms late").
+func (a *mkvAnalysis) audioDelayText() string {
+	return audioDelayTextOf(a.diag)
 }
 
 // fillTrackInfo reports the chosen tracks in the FileInfos.
@@ -101,6 +165,19 @@ func UpdateMkvMetadata(m interface{}) (types.FileInfos, error) {
 		return info, err
 	}
 
+	// Trailing bytes past the declared Segment end can be the crash journal
+	// of an interrupted in-place repair (a previous run killed mid-reindex):
+	// roll the file back to its pre-repair bytes, then look at it again.
+	// Plain junk carries no journal and RecoverInPlace reports false.
+	if a.finding("trailing-junk") != nil {
+		if recovered, rerr := matroska.RecoverInPlace(ctx, info.MkvFilePath); rerr == nil && recovered {
+			pp.Printf("   %s: interrupted in-place repair rolled back\n", filepath.Base(info.MkvFilePath))
+			if fresh, aerr := analyzeMkv(ctx, info.MkvFilePath); aerr == nil {
+				a = fresh
+			}
+		}
+	}
+
 	applyEdit := func(c *matroska.Container) {
 		c.Info.Title = info.MkvTitle
 
@@ -122,15 +199,47 @@ func UpdateMkvMetadata(m interface{}) (types.FileInfos, error) {
 
 	seekStatus := "ok"
 	needEdit := true
+	seekIssue := a.seekIssue
 
-	if a.seekIssue != "" {
+	// Damaged cluster stream: one verified resync rewrite fixes lying sizes
+	// losslessly, cuts around the unrecoverable bytes block by block (video
+	// clean-cut to the next keyframe), seals the Segment size and rebuilds
+	// SeekHead + Cues in the same pass. Refusals (mostly-damaged source)
+	// surface as an error so the caller's uncapped salvage takes over.
+	//
+	// The metadata edit runs FIRST, on the still-damaged file: its head
+	// region is intact (the damage lives in the cluster stream), and the
+	// rewrite then carries the edited metadata over and stays the LAST pass
+	// on the file - so the index it builds is the one the file keeps.
+	if f := a.damageFinding(); f != nil {
+		if !config.SALVAGE {
+			info.MkvDamage = f.Kind + " (-salvage to repair): " + f.Detail
+		} else {
+			if eerr := matroska.EditInPlace(ctx, info.MkvFilePath, applyEdit); eerr != nil {
+				pp.Printf("   %s: metadata edit deferred to after the repair: %v\n", filepath.Base(info.MkvFilePath), eerr)
+			} else {
+				needEdit = false
+			}
+			if rerr := resyncRepair(ctx, info.MkvFilePath); rerr != nil {
+				return info, fmt.Errorf("surgical repair refused for %s: %w", filepath.Base(info.MkvFilePath), rerr)
+			}
+			info.MkvDamage = describeDamageRepair(a.diag.Damage, f)
+			if seekIssue != "" {
+				seekStatus = "rebuilt (was: " + seekIssue + ")"
+			}
+			// the rewrite rebuilt the seek index, skip the dedicated repair
+			seekIssue = ""
+		}
+	}
+
+	if seekIssue != "" {
 		if !config.REPAIR_SEEK_INDEX {
-			seekStatus = a.seekIssue + " (repair disabled)"
-		} else if err := reindexInPlace(ctx, info.MkvFilePath, a.seekIssue); err == nil {
+			seekStatus = seekIssue + " (repair disabled)"
+		} else if err := reindexInPlace(ctx, info.MkvFilePath, seekIssue); err == nil {
 			// Surgical repair: Cues appended, SeekHead repointed, cluster
 			// bytes untouched - one read pass, no file copy. Crash-safe
 			// (in-file journal, verified before commit)
-			seekStatus = "rebuilt in place (was: " + a.seekIssue + ")"
+			seekStatus = "rebuilt in place (was: " + seekIssue + ")"
 		} else {
 			// Fallback: full rewrite. EditMetadata rebuilds SeekHead + Cues
 			// while rewriting, so metadata edit and repair share the pass
@@ -144,7 +253,7 @@ func UpdateMkvMetadata(m interface{}) (types.FileInfos, error) {
 			if err := fullRewrite(ctx, info.MkvFilePath, applyEdit); err != nil {
 				return info, err
 			}
-			seekStatus = "rebuilt (was: " + a.seekIssue + ")"
+			seekStatus = "rebuilt (was: " + seekIssue + ")"
 			needEdit = false
 		}
 	}
@@ -155,9 +264,47 @@ func UpdateMkvMetadata(m interface{}) (types.FileInfos, error) {
 			if err := fullRewrite(ctx, info.MkvFilePath, applyEdit); err != nil {
 				return info, err
 			}
+		} else if config.REPAIR_SEEK_INDEX && seekIndexUnreachable(ctx, info.MkvFilePath) {
+			// Post-condition, not a workaround: a file leaves this pipeline
+			// with an index a player can FIND, or it does not leave it. The
+			// in-place edit rewrites the head region where the SeekHead
+			// lives, and mkvgo <= 0.21.0 wrote the metadata straight over it
+			// when its slot no longer fit - Cues still in the file, nothing
+			// pointing at them, and nil returned. 0.21.1 refuses instead (the
+			// branch above then rewrites), so this should never fire; it
+			// costs one head-only read to be sure, on an operation that
+			// reported success while corrupting the file once. A head with no
+			// SeekHead left cannot grow one back in place, hence the rewrite.
+			const lost = "index dropped by the metadata edit"
+			if err := reindexInPlace(ctx, info.MkvFilePath, "index left unreachable by the metadata edit"); err == nil {
+				if !strings.HasPrefix(seekStatus, "rebuilt") {
+					seekStatus = "rebuilt in place (was: " + lost + ")"
+				}
+			} else if err := fullRewrite(ctx, info.MkvFilePath, applyEdit); err != nil {
+				return info, err
+			} else if !strings.HasPrefix(seekStatus, "rebuilt") {
+				seekStatus = "rebuilt (was: " + lost + ")"
+			}
 		}
 	}
 	info.MkvSeekIndex = seekStatus
+
+	// A/V start desync, measured natively by the triage (first clusters).
+	// -retime cancels it by shifting the audio blocks; otherwise the delay
+	// is only reported, with the flag that would fix it.
+	if shifts := a.audioShifts(); len(shifts) > 0 {
+		switch {
+		case !config.RETIME:
+			info.MkvAudioSync = a.audioDelayText() + " (-retime to fix)"
+		default:
+			if rerr := retimeTracks(ctx, info.MkvFilePath, shifts); rerr != nil {
+				pp.Printf("Warning: retime failed for %s: %v\n", filepath.Base(info.MkvFilePath), rerr)
+				info.MkvAudioSync = a.audioDelayText() + " (retime failed: " + rerr.Error() + ")"
+			} else {
+				info.MkvAudioSync = "retimed (was: " + a.audioDelayText() + ")"
+			}
+		}
+	}
 
 	a.fillTrackInfo(&info)
 
@@ -185,6 +332,25 @@ func PlanMkvMetadata(m interface{}, path string) (types.FileInfos, error) {
 		info.MkvSeekIndex = "would rebuild (" + a.seekIssue + ")"
 	default:
 		info.MkvSeekIndex = a.seekIssue + " (repair disabled)"
+	}
+
+	if f := a.damageFinding(); f != nil {
+		if config.SALVAGE {
+			info.MkvDamage = "would repair (resync): " + f.Detail
+			if f.Kind == "truncated" {
+				info.MkvDamage += " - re-download advised"
+			}
+		} else {
+			info.MkvDamage = f.Kind + " (-salvage to repair): " + f.Detail
+		}
+	}
+
+	if shifts := a.audioShifts(); len(shifts) > 0 {
+		if config.RETIME {
+			info.MkvAudioSync = "would retime (" + a.audioDelayText() + ")"
+		} else {
+			info.MkvAudioSync = a.audioDelayText() + " (-retime to fix)"
+		}
 	}
 
 	a.fillTrackInfo(&info)
@@ -224,6 +390,20 @@ func SeekIndexIssue(c *matroska.Container) string {
 	}
 
 	return ""
+}
+
+// seekIndexUnreachable reports whether a video file's seek index cannot be
+// found from the head any more - the state an in-place metadata edit leaves
+// behind when the new metadata no longer leaves room for the SeekHead slot:
+// the Cues element is still in the file, but nothing points at it, and a
+// player reading the head sees an unindexed file. Head-only (CueHealth reads
+// the SeekHead, Tracks and Cues alone), so it costs milliseconds.
+func seekIndexUnreachable(ctx context.Context, path string) bool {
+	report, err := matroska.CueHealth(ctx, path)
+	if err != nil {
+		return false
+	}
+	return report.HasVideoTrack && report.TotalCues == 0
 }
 
 // reindexInPlace patches the file itself through matroska.ReindexInPlace: the

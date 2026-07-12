@@ -80,9 +80,12 @@ everything else is overridable from the command line:
   --playability PROFILE  report direct-play / remux / transcode per file
                          against a playback profile (chrome, safari, firefox,
                          chromecast-gen3, ...) - head-only read   (default off)
-  --salvage              last-resort recovery of structurally damaged files:
-                         keep the intact clusters, skip the damaged spans
-                         (journaled), retry the pipeline once      (default off)
+  --salvage              repair structurally damaged files: surgical resync
+                         first (lossless where the bytes allow it), best-effort
+                         salvage only if that refuses               (default off)
+  --retime               cancel a diagnosed A/V start desync (audio content
+                         starting late) by shifting the audio tracks; without
+                         it the delay is only reported              (default off)
   --dedup                flag imports whose content (identical track payloads,
                          whatever the name/metadata/track order) is already in
                          the library - report-only, implies --hashes (default off)
@@ -112,7 +115,13 @@ When `RECURSIVE_SCAN = true`, all subfolders are processed:
 
 When `RECURSIVE_SCAN = false`, only files in the root folder are processed.
 
-### MKV Handling (powered by [mkvgo](https://github.com/gravity-zero/mkvgo))
+### Container Handling (powered by [mkvgo](https://github.com/gravity-zero/mkvgo))
+
+Every imported file is triaged by mkvgo in one call (`Diagnose`), whatever its
+container - the engine is chosen from the file's **first bytes**, never its
+extension, so a mislabeled file still routes correctly. The triage classifies
+the seek index, the per-track A/V start delay and the structural integrity, and
+each finding names its own repair, which is what the pipeline then runs.
 
 For every `.mkv`, in addition to renaming:
 - **Title**: the container title is set to the normalized name
@@ -122,10 +131,28 @@ For every `.mkv`, in addition to renaming:
 - **Mislabeled files**: a `.mkv` that is really an MP4-family container is detected and skipped with a clear warning instead of corrupting it
 - **Subtitle sidecars** (opt-in, `MERGE_SUBTITLE_SIDECARS`): external `movie.srt` / `movie.fr.srt` / `movie.fr.forced.ass` files are embedded into the MKV with the right language and forced flag, then deleted - the library stays self-contained
 - **Playability report** (opt-in, `--playability chrome`): each file gets a direct-play / remux / transcode verdict against a real browser/device profile, with the blocking tracks named - you know at import time what your media server will have to transcode
-- **Salvage** (opt-in, `--salvage`): a structurally damaged file (bad sector, truncated download) that the normal pipeline refuses gets a best-effort recovery - intact clusters kept verbatim, damaged spans skipped and journaled, index rebuilt - then goes through the pipeline again
+- **Damage repair** (opt-in, `--salvage`): see below - a damaged file is repaired surgically, not just salvaged
+- **A/V desync** (`MkvAudioSync`, repair opt-in via `--retime`): the triage measures each audio track's start against the first video keyframe. The classic repack defect (audio content starting a few hundred ms late) is reported on every file, and `--retime` cancels it by shifting the audio tracks - mkvgo picks between a 2-bytes-per-block in-place patch and a verified rewrite, and re-reads the result to check every shifted track moved by exactly the requested amount. No re-encode either way
 - **Duplicate detection** (opt-in, `--dedup`): each import's content identity (the mkvgo Fingerprint, rebuilt for free from the `CONTENT_SHA256` tags `--hashes` writes) is checked against the library index (`DEST/.normalize_fingerprints.jsonl`). A re-mux or renamed copy of something you already have gets flagged in the table (`MkvDuplicateOf`) and the journal - never deleted, you decide
 
 Metadata edits are done in place (instant, no file copy). The seek index repair is also in place: the new Cues element is appended inside the Segment and the SeekHead repointed, cluster bytes untouched - one read pass, no copy, crash-safe (in-file journal, verified, rolled back on any failure). A full rewrite only happens as fallback. Set `--repair-index=false` to only report the issue instead of fixing it.
+
+The index is also re-checked (head-only, milliseconds) after the metadata edit: a title long enough to squeeze the SeekHead out of the head region would otherwise leave the Cues in the file with nothing pointing at them - an index that exists but that no player can find. When that happens, the pointer is rebuilt before the file is declared done.
+
+### MP4 files
+
+MP4-family files (`mp4`, `m4v`, `mov`) go through mkvgo too, not just MKVs:
+- kept as MP4 (default): the same triage runs head-only - box-layout truncation, missing `moov`, and the per-track audio delay read from the `moov` edit list. `--retime` fixes a desync by re-basing that edit list: no sample is touched, so it costs a few bytes whatever the file size
+- converted (`--convert-mp4`): the source is triaged **before** the remux. A truncated or `moov`-less file has nothing a remux could carry over cleanly, so the conversion is skipped, the file is moved as-is, and the table says why
+
+### Damaged files (`--salvage`)
+
+A damaged file is repaired in the order that loses the least:
+1. **Surgical repair first** - one verified rewrite (resync) that corrects lying size fields with **zero loss**, cuts around the unrecoverable bytes block by block instead of dropping whole clusters, resumes video at the next keyframe after a gap (a short jump instead of frames decoding into artifacts), seals the Segment size and rebuilds the seek index in the same pass. The result is re-read and compared against the source before it replaces it: only a defect the repair would *add* can refuse it, so a correct repair is never blocked by a defect the file already carried.
+2. **Best-effort salvage** only if that refuses (a mostly-damaged source, which must not silently "repair" into a stub): intact clusters kept verbatim, unrecoverable spans skipped and journaled.
+3. **"Re-download", said out loud** - damage that runs to the end of the file is an *incomplete source*, not corruption: the missing tail exists in no repaired copy, because those bytes were never written. The playable prefix is kept, and the table and journal say `re-download advised` instead of pretending the file was fixed.
+
+An interrupted in-place repair (the process was killed mid-write) is detected and rolled back to the pre-repair bytes on the next run, before anything else touches the file.
 
 ### Cleanup safety rules (`--cleanup`)
 
@@ -165,7 +192,9 @@ make start
 | KEY                          | VALUE                                                 |
 +------------------------------+-------------------------------------------------------+
 | Episode                      | E01                                                   |
+| MkvMetadata.MkvAudioSync     | track 2 starts 320ms late (-retime to fix)            |
 | MkvMetadata.MkvAudioTrack    | english ac3 5.1                                       |
+| MkvMetadata.MkvSeekIndex     | rebuilt in place (was: missing Cues)                  |
 | MkvMetadata.MkvSubTrack      | english (forced)                                      |
 | Normalizer.Title             | Sintel                                                |
 | SE                           | S01E01                                                |
@@ -175,7 +204,18 @@ make start
 
 Movies processed: 5
 Series processed: 12
+Seek indexes repaired: 3
+Damaged files repaired (surgical): 1
+A/V desyncs retimed: 1
 Total videos processed: 17
+```
+
+A damaged import reports what was actually lost, and whether repairing is even
+the right answer:
+```
+| MkvMetadata.MkvDamage        | repaired: 1 damaged range(s), 3904 byte(s)            |
+|                              | unrecoverable, 2 region(s) rebuilt losslessly - tail  |
+|                              | truncated, re-download advised                        |
 ```
 
 ## 📁 File Organization

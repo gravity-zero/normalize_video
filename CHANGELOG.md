@@ -4,6 +4,95 @@ All notable changes to normalize_video are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/), and the project
 follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-07-13
+
+**Highlights**
+
+- **Damaged files are repaired, not just salvaged** - `--salvage` now runs a
+  surgical resync repair first (lying size fields corrected with zero loss,
+  damage cut around block by block, video resumed at the next keyframe), and
+  only falls back to the lossy best-effort salvage when that refuses.
+- **"Repair" vs "re-download", said out loud** - damage running to the end of
+  the file is an incomplete source, not corruption: no tool can restore bytes
+  that were never written. The file reports `re-download advised` instead of
+  pretending it was fixed.
+- **A/V desync detected on every file, fixed on demand** (`--retime`) - the
+  repack defect where audio starts a few hundred ms late is measured natively
+  and cancelled without re-encoding.
+- **MP4 files go through mkvgo too** - the same triage and the same retime
+  repair, whether they are converted to MKV or kept as MP4.
+
+### Added
+
+- **Container-agnostic triage** (mkvgo `Diagnose`): every import is classified
+  in one call - seek-index health, per-track A/V start delay, structural
+  integrity - and each finding names its own repair, which is what the
+  pipeline runs. The engine is chosen from the file's FIRST BYTES, never its
+  extension, so a mislabeled file still routes correctly.
+- **Surgical damage repair** (`--salvage`, reported in `MkvDamage`): a damaged
+  cluster stream is repaired by one verified resync rewrite - lying size
+  fields over intact payloads corrected losslessly, damage cut around block by
+  block instead of dropping whole clusters (a repair typically loses a few KB
+  where a plain skip would lose seconds of media), video resumed at the next
+  keyframe after a gap (clean cut: a short jump instead of frames decoding
+  into artifacts), Segment size sealed and seek index rebuilt in the same
+  pass. The result is deep-verified against the source before replacing it:
+  only a defect the repair ADDED can refuse it, so a correct repair is not
+  blocked by a defect the file already carried. The uncapped best-effort
+  salvage now only runs when this refuses (mostly-damaged source).
+- **Truncated-tail verdict**: damage reaching the end of the file marks the
+  source incomplete - the playable prefix is kept, and the table and journal
+  say `re-download advised`.
+- **`--retime`** (off by default, reported in `MkvAudioSync` on every file):
+  each audio track's start is measured against the first video keyframe, and a
+  delay >= 100ms is cancelled by shifting the audio - mkvgo picks between a
+  2-bytes-per-block in-place patch (crash-safe journal) and a verified
+  rewrite, then re-reads the result to check every shifted track moved by
+  exactly the requested amount. No re-encode. Without the flag the delay is
+  only reported, with the flag that would fix it.
+- **MP4 files use the mkvgo pipeline**: kept as MP4, they get the same
+  head-only triage (box-layout truncation, missing `moov`, edit-list audio
+  delays) and the same opt-in retime, which re-bases the `moov` edit list - no
+  sample touched, a few bytes whatever the file size. Converted
+  (`--convert-mp4`), they are triaged BEFORE the remux: a truncated or
+  `moov`-less source has nothing a remux could carry over cleanly, so the
+  conversion is skipped, the file is moved as-is and the table says why.
+- **Interrupted-repair recovery**: trailing bytes past the declared Segment
+  end can be the crash journal of an in-place repair killed mid-write. The
+  file is rolled back to its pre-repair bytes and re-analyzed before anything
+  else touches it.
+- **Journal**: new `repair_damage`, `retime` and `diagnose` operations; the
+  salvage line now reports the losslessly rebuilt regions and the truncated
+  tail. New summary counters: damaged files repaired, A/V desyncs retimed.
+
+### Fixed
+
+- **The metadata edit could leave the seek index unreachable.** The in-place
+  edit rewrites the head region, and metadata grown past the SeekHead's
+  reserved slot left no room for it: the Cues element stayed in the file with
+  nothing pointing at it - an index that exists but that no head-only reader
+  (that is, any player) can find. Found while testing the repair path, fixed
+  upstream in mkvgo 0.21.1 (`EditInPlace` now sizes the SeekHead slot to fit,
+  or refuses the edit rather than trading the index for it). Two things stay
+  on this side: the index is re-checked head-only (milliseconds) after every
+  edit and rebuilt if it ever goes missing again - the operation reported
+  success while corrupting the file once, so the invariant is asserted where
+  it matters rather than assumed - and on a damaged file the metadata edit
+  runs BEFORE the repair rewrite, so the index that rewrite builds is the one
+  the file keeps.
+
+### Changed
+
+- mkvgo upgraded v0.17.0 -> v0.21.1. Beyond the features above, 0.21.1 closes
+  six paths that reported success while leaving the file wrong; two are on
+  this pipeline's route - the `EditInPlace` index loss above, and a stale Cues
+  span of certain exact sizes that made `ReindexInPlace` void one byte too
+  far, break the element chain, and commit it through its journal as a
+  success.
+- `SeekIndexIssue` heuristics are now backed by the mkvgo triage
+  (`CueHealth`), which also spots cues referencing tracks that no longer
+  exist (a stale index) - the head-only check the local heuristic missed.
+
 ## [0.2.0] - 2026-07-09
 
 **Highlights**

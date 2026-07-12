@@ -217,6 +217,8 @@ type ProcessStats struct {
 	MoviesCount       int
 	SeriesCount       int
 	SeekIndexRepaired int
+	DamageRepaired    int
+	Retimed           int
 	SubtitlesMerged   int
 	Converted         int
 	Skipped           int
@@ -236,6 +238,8 @@ func newProcessStats() ProcessStats {
 
 type mediaResult struct {
 	SeekIndexRepaired bool
+	DamageRepaired    bool
+	Retimed           bool
 	SubtitlesMerged   int
 	Converted         bool
 	Skipped           bool
@@ -274,6 +278,12 @@ func collectResult(stats *ProcessStats, mu *sync.Mutex, video *types.Video, res 
 
 	if res.SeekIndexRepaired {
 		stats.SeekIndexRepaired++
+	}
+	if res.DamageRepaired {
+		stats.DamageRepaired++
+	}
+	if res.Retimed {
+		stats.Retimed++
 	}
 	if res.Converted {
 		stats.Converted++
@@ -371,9 +381,22 @@ func processMedia(media types.Normalizable) (mediaResult, error) {
 	ctx := context.Background()
 
 	if convert {
-		if err := mkvmetadata.ConvertToMkv(ctx, originPath, newPath); err != nil {
-			pp.Printf("Warning: MP4 conversion failed for %s, moving as-is: %v\n", filepath.Base(originPath), err)
-			service.Journal("convert", originPath, newPath, "failed", err.Error())
+		// A truncated or moov-less source has nothing a remux could carry
+		// over cleanly: skip the conversion outright, the plain-move path
+		// below lands it as-is and the mkvgo triage puts the re-download
+		// verdict on the table. That refusal is a decision, not a failure -
+		// the journal says so, so a reader can tell it from a broken remux.
+		convErr := error(nil)
+		convStatus := "failed"
+		if verdict := mkvmetadata.ConvertBlocker(ctx, originPath); verdict != "" {
+			convErr = fmt.Errorf("unconvertible source (%s)", verdict)
+			convStatus = "skipped"
+		} else {
+			convErr = mkvmetadata.ConvertToMkv(ctx, originPath, newPath)
+		}
+		if err := convErr; err != nil {
+			pp.Printf("Warning: MP4 conversion skipped for %s, moving as-is: %v\n", filepath.Base(originPath), err)
+			service.Journal("convert", originPath, newPath, convStatus, err.Error())
 			// fall back to a plain move under the original extension
 			convert = false
 			extension = strings.ToLower(video.Extension)
@@ -416,9 +439,12 @@ func processMedia(media types.Normalizable) (mediaResult, error) {
 				service.Journal("salvage", newPath, "", "failed", serr.Error())
 			} else {
 				res.Salvaged = true
-				service.Journal("salvage", newPath, "", "done",
-					fmt.Sprintf("%d cluster(s) kept, %d byte(s) skipped, %d damaged range(s)",
-						report.ClustersCopied, report.BytesSkipped, len(report.DamagedRanges)))
+				detail := fmt.Sprintf("%d cluster(s) kept, %d byte(s) skipped, %d damaged range(s), %d region(s) rebuilt losslessly",
+					report.ClustersCopied, report.BytesSkipped, len(report.DamagedRanges), len(report.RepairedRanges))
+				if report.TruncatedTail {
+					detail += ", tail truncated (re-download advised)"
+				}
+				service.Journal("salvage", newPath, "", "done", detail)
 				result, err = mkvmetadata.UpdateMkvMetadata(media)
 			}
 		}
@@ -428,6 +454,14 @@ func processMedia(media types.Normalizable) (mediaResult, error) {
 			res.SeekIndexRepaired = strings.HasPrefix(result.MkvSeekIndex, "rebuilt")
 			if res.SeekIndexRepaired {
 				service.Journal("repair", newPath, "", "done", result.MkvSeekIndex)
+			}
+			res.DamageRepaired = strings.HasPrefix(result.MkvDamage, "repaired")
+			if res.DamageRepaired {
+				service.Journal("repair_damage", newPath, "", "done", result.MkvDamage)
+			}
+			res.Retimed = strings.HasPrefix(result.MkvAudioSync, "retimed")
+			if res.Retimed {
+				service.Journal("retime", newPath, "", "done", result.MkvAudioSync)
 			}
 			if config.PLAYABILITY_TARGET != "" {
 				if verdict, perr := mkvmetadata.CheckPlayability(ctx, newPath, config.PLAYABILITY_TARGET); perr != nil {
@@ -451,6 +485,28 @@ func processMedia(media types.Normalizable) (mediaResult, error) {
 				}
 			}
 		}
+	} else if config.MP4Convertible[extension] {
+		// MP4 kept as MP4 still goes through mkvgo: head-only triage
+		// (box-layout truncation, missing moov, edit-list audio delays) and
+		// the opt-in retime through the moov edit list - the container is
+		// sniffed from the first bytes, so a mislabeled file routes right.
+		var result types.FileInfos
+		result.MkvFilePath = newPath
+		damage, audioSync, retimed, derr := mkvmetadata.DiagnoseMedia(ctx, newPath, config.RETIME)
+		if derr != nil {
+			pp.Printf("Warning: MP4 triage failed for %s: %v\n", filepath.Base(newPath), derr)
+		} else {
+			result.MkvDamage = damage
+			result.MkvAudioSync = audioSync
+			res.Retimed = retimed
+			if retimed {
+				service.Journal("retime", newPath, "", "done", audioSync)
+			}
+			if damage != "" {
+				service.Journal("diagnose", newPath, "", "detected", damage)
+			}
+			setMkvMetadata(media, result)
+		}
 	}
 
 	printMediaTable(media)
@@ -466,9 +522,14 @@ func dryRunMedia(media types.Normalizable, originPath, newPath, extension string
 	res.PlannedGone = []string{originPath}
 
 	if convert {
-		pp.Printf("   would convert to MKV: %s\n", newPath)
-		service.Journal("convert", originPath, newPath, "planned", "")
-		res.Converted = true
+		if blocker := mkvmetadata.ConvertBlocker(context.Background(), originPath); blocker != "" {
+			pp.Printf("   would move as-is, conversion pointless (%s)\n", blocker)
+			service.Journal("convert", originPath, newPath, "planned", "would skip: "+blocker)
+		} else {
+			pp.Printf("   would convert to MKV: %s\n", newPath)
+			service.Journal("convert", originPath, newPath, "planned", "")
+			res.Converted = true
+		}
 	} else {
 		pp.Printf("   would move to: %s\n", newPath)
 		service.Journal("move", originPath, newPath, "planned", "")
@@ -492,6 +553,12 @@ func dryRunMedia(media types.Normalizable, originPath, newPath, extension string
 			if res.SeekIndexRepaired {
 				service.Journal("repair", newPath, "", "planned", result.MkvSeekIndex)
 			}
+			if strings.HasPrefix(result.MkvDamage, "would repair") {
+				service.Journal("repair_damage", newPath, "", "planned", result.MkvDamage)
+			}
+			if strings.HasPrefix(result.MkvAudioSync, "would retime") {
+				service.Journal("retime", newPath, "", "planned", result.MkvAudioSync)
+			}
 			if config.PLAYABILITY_TARGET != "" {
 				if verdict, perr := mkvmetadata.CheckPlayability(context.Background(), originPath, config.PLAYABILITY_TARGET); perr == nil {
 					result.MkvPlayability = verdict
@@ -503,6 +570,22 @@ func dryRunMedia(media types.Normalizable, originPath, newPath, extension string
 		if config.WRITE_CONTENT_HASHES {
 			res.Hashed = true
 			service.Journal("hash", newPath, "", "planned", "")
+		}
+	} else if config.MP4Convertible[strings.TrimPrefix(strings.ToLower(filepath.Ext(originPath)), ".")] {
+		// MP4-family plan: same head-only mkvgo triage as the real run,
+		// read-only at the file's current location.
+		damage, audioSync, terr := mkvmetadata.PlanMediaTriage(context.Background(), originPath)
+		if terr != nil {
+			pp.Printf("Warning: MP4 triage failed for %s: %v\n", filepath.Base(originPath), terr)
+		} else {
+			result := types.FileInfos{MkvFilePath: newPath, MkvDamage: damage, MkvAudioSync: audioSync}
+			if strings.HasPrefix(audioSync, "would retime") {
+				service.Journal("retime", newPath, "", "planned", audioSync)
+			}
+			if damage != "" {
+				service.Journal("diagnose", newPath, "", "planned", damage)
+			}
+			setMkvMetadata(media, result)
 		}
 	}
 
@@ -583,6 +666,12 @@ func printStats(stats ProcessStats, elapsed time.Duration) {
 	}
 	if stats.SeekIndexRepaired > 0 {
 		pp.Println("Seek indexes repaired:", stats.SeekIndexRepaired)
+	}
+	if stats.DamageRepaired > 0 {
+		pp.Println("Damaged files repaired (surgical):", stats.DamageRepaired)
+	}
+	if stats.Retimed > 0 {
+		pp.Println("A/V desyncs retimed:", stats.Retimed)
 	}
 	if stats.SubtitlesMerged > 0 {
 		pp.Println("Subtitle sidecars merged:", stats.SubtitlesMerged)

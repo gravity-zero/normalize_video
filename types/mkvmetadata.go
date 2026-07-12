@@ -6,6 +6,8 @@ type FileInfos struct {
 	MkvAudioTrack  string
 	MkvSubTrack    string
 	MkvSeekIndex   string
+	MkvDamage      string
+	MkvAudioSync   string
 	MkvPlayability string
 	MkvDuplicateOf string
 }
