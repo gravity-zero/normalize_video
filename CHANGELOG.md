@@ -4,6 +4,41 @@ All notable changes to normalize_video are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/), and the project
 follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Two false verdicts on the seek index, both of which had this pipeline rewrite
+the index of files that seek perfectly well. Measured on the library: of 12
+sampled files, 8 would have been needlessly reindexed; the corrected rule
+leaves 428 of 462 alone and flags 34 whose video cues really do leave holes
+(33s to 67s - a seek there lands that far from its target).
+
+### Fixed
+
+- **The index verdict now judges the video cues, not the presence of others.**
+  A cue keyed on an audio track is inert: the keyframe index a player seeks
+  with is built from the video-keyed cues and drops the rest. Yet a single
+  audio cue condemned a file - and real muxers routinely cue *every* track, so
+  files with a dense, perfectly seekable video index were reindexed for
+  nothing (one library file: 1436 video cues, flagged over 2096 audio ones).
+  `SeekIndexIssue` now reports `cues keyed on non-video track` only when NOT
+  ONE cue keys on video (the defect it was built for - every seek lands
+  mid-GOP), and gains `video cues leave a Ns hole` for an index too coarse to
+  seek with (over 30s between consecutive video cues, or before the first /
+  after the last).
+- **The index verdict is read from the full parse, not the head-only triage.**
+  Cues sitting at the tail with no SeekHead pointing at them are found by the
+  bounded scan back from EOF - the layout many muxers produce, and one every
+  player handles. The head-only check only follows SeekHead pointers, so it
+  called those files unindexed (three of twelve sampled library files: 0 cues
+  head-only, over 1500 video cues in reality) and had us rebuild an index they
+  already had. The pipeline already pays for a full read, so the verdict now
+  comes from there - the same truth a player sees. The triage keeps what the
+  parse cannot give: cluster-stream damage and A/V start delays. (mkvgo fixes
+  its head-only path too, but the verdict belongs on the data we already have.)
+- **The post-edit index check no longer fires on files that never had a
+  head-discoverable index.** It compares the head-only view before and after
+  the edit: only an index the edit LOST is rebuilt.
+
 ## [0.3.0] - 2026-07-13
 
 **Highlights**

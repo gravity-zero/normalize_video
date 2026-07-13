@@ -8,6 +8,7 @@ import (
 	"normalize_video/types"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/gravity-zero/mkvgo/matroska"
@@ -59,41 +60,37 @@ func analyzeMkv(ctx context.Context, path string) (*mkvAnalysis, error) {
 		bestSub:   service.GetBestSubtitleTrack(subtitleTracks),
 	}
 
-	// One-call triage: index health (head-only), audio start delays (first
-	// clusters), declared-size coherence; the tolerant damage walk runs only
-	// when the sizes disagree. Every finding names its remedy, which is what
-	// routes the repairs below.
+	// The index verdict comes from the container we just parsed, NOT from the
+	// triage's head-only view. Both answer the same question, but we already
+	// paid for the full read, and it sees what a player sees: Cues sitting at
+	// the tail with no SeekHead pointing at them are found by the bounded
+	// scan back from EOF, and are perfectly seekable. A head-only check that
+	// only follows SeekHead pointers calls those files unindexed and has us
+	// rewrite an index they already have.
+	a.seekIssue = SeekIndexIssue(c)
+
+	// The triage is what the full parse cannot give: cluster-stream damage
+	// (declared-size coherence, tolerant walk when the sizes disagree) and
+	// per-track A/V start delays. Every finding names its remedy, which is
+	// what routes the repairs below.
 	diag, derr := matroska.Diagnose(ctx, path)
 	if derr != nil {
-		// triage must never block the pipeline: fall back to the local
-		// index heuristic; damage stays undetected until an operation trips
-		pp.Printf("Warning: diagnose failed for %s, using head-only index check: %v\n", filepath.Base(path), derr)
-		a.seekIssue = SeekIndexIssue(c)
+		// triage must never block the pipeline: the index verdict above still
+		// stands; damage stays undetected until an operation trips on it
+		pp.Printf("Warning: diagnose failed for %s, damage and A/V sync not checked: %v\n", filepath.Base(path), derr)
 		return a, nil
 	}
 	a.diag = diag
-	a.seekIssue = seekIssueFrom(diag)
 	return a, nil
 }
 
-// seekIssueFrom maps the diagnosis' index findings to the short reasons the
-// per-file table and the journal have always shown. Files without a video
-// track are exempt, like SeekIndexIssue: their cues legitimately key on audio.
-func seekIssueFrom(d *matroska.Diagnosis) string {
-	if d.CueHealth != nil && !d.CueHealth.HasVideoTrack {
-		return ""
+// cueHealthBefore is the head-only index view the triage took before anything
+// wrote to the file, nil when the triage did not run.
+func cueHealthBefore(a *mkvAnalysis) *matroska.CueHealthReport {
+	if a.diag == nil {
+		return nil
 	}
-	for _, f := range d.Findings {
-		switch f.Kind {
-		case "no-index":
-			return "missing Cues"
-		case "index-misskeyed":
-			return "cues keyed on non-video track"
-		case "index-stale-tracks":
-			return "cues referencing stale tracks"
-		}
-	}
-	return ""
+	return a.diag.CueHealth
 }
 
 // finding returns the first diagnosis finding of the given kind, nil when the
@@ -264,17 +261,14 @@ func UpdateMkvMetadata(m interface{}) (types.FileInfos, error) {
 			if err := fullRewrite(ctx, info.MkvFilePath, applyEdit); err != nil {
 				return info, err
 			}
-		} else if config.REPAIR_SEEK_INDEX && seekIndexUnreachable(ctx, info.MkvFilePath) {
-			// Post-condition, not a workaround: a file leaves this pipeline
-			// with an index a player can FIND, or it does not leave it. The
-			// in-place edit rewrites the head region where the SeekHead
-			// lives, and mkvgo <= 0.21.0 wrote the metadata straight over it
-			// when its slot no longer fit - Cues still in the file, nothing
-			// pointing at them, and nil returned. 0.21.1 refuses instead (the
-			// branch above then rewrites), so this should never fire; it
-			// costs one head-only read to be sure, on an operation that
-			// reported success while corrupting the file once. A head with no
-			// SeekHead left cannot grow one back in place, hence the rewrite.
+		} else if config.REPAIR_SEEK_INDEX && seekIndexLost(ctx, info.MkvFilePath, cueHealthBefore(a)) {
+			// Post-condition, not a workaround: the edit must not cost the
+			// file the index it had. mkvgo 0.21.1 refuses the edit rather
+			// than overwrite the SeekHead (the branch above then rewrites),
+			// so this should never fire; it costs one head-only read to be
+			// sure, on an operation that reported success while corrupting
+			// the file once. A head with no SeekHead left cannot grow one
+			// back in place, hence the rewrite.
 			const lost = "index dropped by the metadata edit"
 			if err := reindexInPlace(ctx, info.MkvFilePath, "index left unreachable by the metadata edit"); err == nil {
 				if !strings.HasPrefix(seekStatus, "rebuilt") {
@@ -365,16 +359,32 @@ func IsNotMatroska(err error) bool {
 	return errors.Is(err, matroska.ErrNotMatroska)
 }
 
+// maxSeekGapMs is the widest hole tolerated in a file's video cue coverage.
+// Past it, a seek into the hole lands more than this far from its target,
+// which is no longer seeking - and a reindex fixes it, writing one cue per
+// cluster holding a video keyframe (a few seconds apart on any real mux).
+const maxSeekGapMs = 30_000
+
 // SeekIndexIssue reports why a file's Cues index hurts seeking (evey scrubbing,
 // VLC arrow keys, HLS segmenting): "" when healthy, otherwise a short reason.
 // Cheap: works from the already-parsed metadata, no cluster scan.
+//
+// The verdict is the VIDEO index's own ability to serve a seek. A cue keyed on
+// an audio track is inert - the keyframe index a player seeks with is built
+// from the video-keyed cues and drops the rest - and real muxers routinely cue
+// every track, so condemning a file over a single audio cue (which this used
+// to do, and mkvgo with it until 0.22) rewrites the index of files whose video
+// coverage is dense and perfectly seekable.
 func SeekIndexIssue(c *matroska.Container) string {
 	videoIDs := map[uint64]bool{}
+	knownIDs := map[uint64]bool{}
 	for _, t := range c.Tracks {
+		knownIDs[t.ID] = true
 		if t.Type == matroska.VideoTrack {
 			videoIDs[t.ID] = true
 		}
 	}
+	// an audio-only file legitimately cues audio
 	if len(videoIDs) == 0 {
 		return ""
 	}
@@ -383,27 +393,67 @@ func SeekIndexIssue(c *matroska.Container) string {
 		return "missing Cues"
 	}
 
+	var videoTimes []int64
 	for _, cue := range c.Cues {
-		if !videoIDs[cue.Track] {
-			return "cues keyed on non-video track"
+		switch {
+		case videoIDs[cue.Track]:
+			videoTimes = append(videoTimes, cue.TimeMs)
+		case !knownIDs[cue.Track]:
+			// a cue pointing at a track the file does not have: a stale or
+			// foreign index, whatever the rest of it looks like
+			return "cues referencing stale tracks"
 		}
+	}
+
+	if len(videoTimes) == 0 {
+		return "cues keyed on non-video track"
+	}
+
+	if gap := maxVideoGapMs(videoTimes, c.DurationMs); gap > maxSeekGapMs {
+		return fmt.Sprintf("video cues leave a %ds hole", gap/1000)
 	}
 
 	return ""
 }
 
-// seekIndexUnreachable reports whether a video file's seek index cannot be
-// found from the head any more - the state an in-place metadata edit leaves
-// behind when the new metadata no longer leaves room for the SeekHead slot:
-// the Cues element is still in the file, but nothing points at it, and a
-// player reading the head sees an unindexed file. Head-only (CueHealth reads
-// the SeekHead, Tracks and Cues alone), so it costs milliseconds.
-func seekIndexUnreachable(ctx context.Context, path string) bool {
-	report, err := matroska.CueHealth(ctx, path)
+// maxVideoGapMs is the widest hole in the video cue coverage - the worst
+// distance a seek can land from its target - measured between consecutive
+// video cues, and from 0 to the first and from the last to the duration when
+// it is known (so a half-indexed file is caught too).
+func maxVideoGapMs(videoTimes []int64, durationMs int64) int64 {
+	sorted := append([]int64(nil), videoTimes...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+
+	max := sorted[0] // from the start of the file to the first video cue
+	for i := 1; i < len(sorted); i++ {
+		if gap := sorted[i] - sorted[i-1]; gap > max {
+			max = gap
+		}
+	}
+	if durationMs > 0 {
+		if tail := durationMs - sorted[len(sorted)-1]; tail > max {
+			max = tail
+		}
+	}
+	return max
+}
+
+// seekIndexLost reports whether the metadata edit destroyed the seek index the
+// file had: the in-place edit rewrites the head region where the SeekHead
+// lives, and mkvgo <= 0.21.0 wrote the metadata straight over it when its slot
+// no longer fit - Cues still in the file, nothing pointing at them, and nil
+// returned. It compares the head-only view BEFORE the edit (from the triage)
+// against the one after: a file whose index was never head-discoverable to
+// begin with (Cues at the tail, no SeekHead) is not a file the edit broke.
+func seekIndexLost(ctx context.Context, path string, before *matroska.CueHealthReport) bool {
+	if before == nil || before.TotalCues == 0 {
+		return false
+	}
+	after, err := matroska.CueHealth(ctx, path)
 	if err != nil {
 		return false
 	}
-	return report.HasVideoTrack && report.TotalCues == 0
+	return after.HasVideoTrack && after.TotalCues == 0
 }
 
 // reindexInPlace patches the file itself through matroska.ReindexInPlace: the
