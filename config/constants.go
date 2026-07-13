@@ -85,6 +85,14 @@ var (
 	// written. Off by default
 	SALVAGE = false
 
+	// Keep the year found in the source filename in the normalized name:
+	// "Big buck bunny (2008) - 1080P.mkv" instead of "Big buck bunny -
+	// 1080P.mkv". The year is what the title is cut on, so it is dropped by
+	// default; a media server uses it to tell two films of the same name
+	// apart ("Dune (1984)" vs "Dune (2021)"). A year that IS the title
+	// ("2012") is kept either way - it is the title. Off by default
+	KEEP_YEAR = false
+
 	// Cancel a diagnosed constant A/V start desync (audio content starting
 	// >=100ms after the video, the classic repack defect) by shifting the
 	// audio blocks - mkvgo picks between a crash-safe in-place 2-byte patch
@@ -120,6 +128,7 @@ func ParseFlags() {
 	flag.StringVar(&PLAYABILITY_TARGET, "playability", PLAYABILITY_TARGET, "report direct-play/remux/transcode against a profile (chrome, safari, firefox, chromecast-gen3, ...)")
 	flag.BoolVar(&SALVAGE, "salvage", SALVAGE, "repair damaged files (surgical resync first, best-effort salvage as last resort)")
 	flag.BoolVar(&RETIME, "retime", RETIME, "cancel a diagnosed A/V start desync by shifting the audio blocks")
+	flag.BoolVar(&KEEP_YEAR, "keep-year", KEEP_YEAR, "keep the year in the normalized name: Title (2008) - 1080P.mkv")
 	flag.BoolVar(&DEDUP, "dedup", DEDUP, "flag content duplicates at import (report-only, implies -hashes)")
 	flag.Parse()
 

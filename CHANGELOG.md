@@ -4,6 +4,35 @@ All notable changes to normalize_video are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/), and the project
 follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.2] - 2026-07-13
+
+### Added
+
+- **`--keep-year`** (off by default): the year found in the release name is
+  kept in the normalized one - `Dune (1984) - 1080P.mkv` - the form a media
+  server reads to tell two films of the same name apart. The year is a marker
+  the title is cut on, so it is dropped by default; a year that IS the title
+  (`2012`, `1917`) is kept either way and never duplicated into `2012 (2012)`
+  - the release year of such a film is the next year token along. The flag
+  only changes the filename; the title written inside the MKV stays bare.
+
+### Fixed
+
+- **A short word in a title is not a language.** The language was resolved by
+  handing any 2-3 letter token to `x/text`'s `language.Parse`, which checks
+  that a tag is WELL-FORMED, not that it names a language anyone releases in:
+  `big`, `the`, `in`, `age`, `sun` and `vol` are all valid ISO 639-3 codes. The
+  title is cut at its first language token, so it was cut mid-title -
+  `Men.in.Black.1997.1080p.mkv` normalised to `Men - 1080P.mkv`. Only the known
+  release tags (`config/languages.go`) are recognised now.
+
+  Nothing in the library was affected, and this is worth stating plainly: the
+  detection keeps the LAST language found in the name, and every real release
+  name carries an explicit tag (`MULTi`, `FRENCH`, `VFI`...) that overrode the
+  false positive. Replayed on the 16 real release names in the journal, the
+  fix changes 0 of them. It closes a latent trap - a source without any
+  language tag - not a live defect.
+
 ## [0.3.1] - 2026-07-13
 
 Two false verdicts on the seek index, both of which had this pipeline rewrite

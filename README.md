@@ -89,7 +89,27 @@ everything else is overridable from the command line:
   --dedup                flag imports whose content (identical track payloads,
                          whatever the name/metadata/track order) is already in
                          the library - report-only, implies --hashes (default off)
+  --keep-year            keep the year in the normalized name:
+                         "Dune (1984) - 1080P.mkv"                   (default off)
 ```
+
+### Naming
+
+The title is everything before the first structural marker in the release name
+- the year, the quality, the `SxxEyy` - and the rest (release group, codec,
+source, container junk) is dropped. The year is one of those markers, so it is
+dropped with them, *unless* it IS the title (`2012`, `1917`), which is kept.
+`--keep-year` puts it back in the name instead: `Dune (1984) - 1080P.mkv`, the
+form a media server reads to tell two films of the same name apart. It only
+changes the filename; the title written inside the MKV stays bare.
+
+The language is recognised from the known release tags (`config/languages.go`:
+`vf`, `vostfr`, `multi`, `truefrench`, `french`, ...), not by parsing any short
+token as a language code - `big`, `the`, `in`, `age`, `sun` and `vol` are all
+valid ISO 639-3 codes, and a title is cut at its first language token, so
+`Men.in.Black.1997.1080p.mkv` used to normalise to `Men - 1080P.mkv`. Release
+names that carry a real tag (`MULTi`, `FRENCH`, ...) were never affected - the
+real tag won over the false one - which is why nothing in the library shows it.
 
 MKV language preferences (compile-time, `config/constants.go`):
 ```go

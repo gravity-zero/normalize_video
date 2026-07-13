@@ -67,7 +67,34 @@ func NormalizeTitle(infos types.Normalizable) {
 		cleanedParts = strings.TrimSpace(cleanedParts)
 	}
 
+	// The year is what the title is cut on, so it is dropped by construction.
+	// Remember it here: -keep-year puts it back in the normalized name. The
+	// scan starts at 1 because a year at index 0 IS the title ("2012") - the
+	// release year of such a film is the NEXT year token ("2012.2009")
+	infos.GetNormalizer().Year = findYear(firstStep)
+
 	infos.SetTitle(UcFirst(cleanedParts))
+}
+
+// findYear returns the release year of a source filename, "" when it carries
+// none. It skips index 0, where a 4-digit token is the TITLE ("2012", "1917")
+// rather than a release year - the release year of such a film is the next
+// year token along.
+func findYear(parts []string) string {
+	for i := 1; i < len(parts); i++ {
+		if isYear(parts[i]) {
+			return parts[i]
+		}
+	}
+	return ""
+}
+
+// isYear reports whether s is a plausible release year. getDateIndex accepts
+// any 4-digit token as a cut point (it always has), but only a real year is
+// worth writing back into a filename.
+func isYear(s string) bool {
+	y, err := strconv.Atoi(s)
+	return err == nil && len(s) == 4 && y >= 1900 && y <= 2099
 }
 
 func UcFirst(s string) string {
@@ -117,9 +144,11 @@ func NormalizeFilename(infos types.Normalizable) {
 	ext := video.Extension
 	var normalized string
 
+	title := TitleWithYear(infos.GetNormalizer())
+
 	switch infos.GetVideo().Type {
 		case "Serie":
-			normalized = infos.GetNormalizer().Title + " " + infos.GetSE()
+			normalized = title + " " + infos.GetSE()
 
 			if video.LanguageTag != "" {
 				normalized += " - " + strings.ToUpper(video.LanguageTag)
@@ -130,15 +159,26 @@ func NormalizeFilename(infos types.Normalizable) {
 			}
 
 		case "Movie":
-			normalized = infos.GetNormalizer().Title
+			normalized = title
 
 			if video.Quality != "" {
 				normalized += " - " + strings.ToUpper(video.Quality)
 			}
 
 		default:
-			normalized = infos.GetNormalizer().Title
+			normalized = title
 	}
 	normalized += "." + ext
 	infos.SetNormalizeFilename(normalized)
+}
+
+// TitleWithYear is the title as it goes into the filename: bare by default
+// (the year in a release name is noise once the library is organised), with
+// the year in parentheses under -keep-year - the form media servers read to
+// tell two films of the same name apart ("Dune (1984)" vs "Dune (2021)").
+func TitleWithYear(n *types.Normalizer) string {
+	if !config.KEEP_YEAR || n.Year == "" {
+		return n.Title
+	}
+	return n.Title + " (" + n.Year + ")"
 }
