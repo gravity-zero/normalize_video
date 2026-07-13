@@ -4,7 +4,7 @@ All notable changes to normalize_video are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/), and the project
 follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.1] - 2026-07-13
 
 Two false verdicts on the seek index, both of which had this pipeline rewrite
 the index of files that seek perfectly well. Measured on the library: of 12
@@ -38,6 +38,18 @@ leaves 428 of 462 alone and flags 34 whose video cues really do leave holes
 - **The post-edit index check no longer fires on files that never had a
   head-discoverable index.** It compares the head-only view before and after
   the edit: only an index the edit LOST is rebuilt.
+
+### Changed
+
+- mkvgo upgraded v0.21.1 -> v0.22.0, which fixes the head-only blindness at
+  its source (a bounded tail scan now finds the Cues, tags and chapters a file
+  carries past its clusters when no SeekHead points at them) and judges the
+  index the same way this pipeline does. Verified on the library: 0 of 462
+  files now report an empty index head-only, where 3 of 12 sampled ones did.
+  Its `ReindexInPlace` also stops refusing layouts it can repair (no SeekHead
+  but a Void slot in the head), so those files are patched in place instead of
+  paying a full copy rewrite - the fallback path here is unchanged, it just
+  fires less.
 
 ## [0.3.0] - 2026-07-13
 
