@@ -142,13 +142,15 @@ func NormalizeFilename(infos types.Normalizable) {
 
 	video := infos.GetVideo()
 	ext := video.Extension
+	title := infos.GetNormalizer().Title
+	year := YearSuffix(infos.GetNormalizer())
 	var normalized string
-
-	title := TitleWithYear(infos.GetNormalizer())
 
 	switch infos.GetVideo().Type {
 		case "Serie":
-			normalized = title + " " + infos.GetSE()
+			// the year sits after SxxEyy, not glued to the title, so the
+			// unflagged format ("Title SxxEyy - LANG - QUALITY") is untouched
+			normalized = title + " " + infos.GetSE() + year
 
 			if video.LanguageTag != "" {
 				normalized += " - " + strings.ToUpper(video.LanguageTag)
@@ -159,26 +161,26 @@ func NormalizeFilename(infos types.Normalizable) {
 			}
 
 		case "Movie":
-			normalized = title
+			normalized = title + year
 
 			if video.Quality != "" {
 				normalized += " - " + strings.ToUpper(video.Quality)
 			}
 
 		default:
-			normalized = title
+			normalized = title + year
 	}
 	normalized += "." + ext
 	infos.SetNormalizeFilename(normalized)
 }
 
-// TitleWithYear is the title as it goes into the filename: bare by default
-// (the year in a release name is noise once the library is organised), with
-// the year in parentheses under -keep-year - the form media servers read to
-// tell two films of the same name apart ("Dune (1984)" vs "Dune (2021)").
-func TitleWithYear(n *types.Normalizer) string {
+// YearSuffix is " - <year>" under -keep-year when the source filename carried
+// one, "" otherwise - "Dune - 1984" vs "Dune - 2021" tells two films of the
+// same name apart. For series it goes after SxxEyy, not glued to the title:
+// "The sentinel S04E02 - 2008 - VF - 1080P.mkv".
+func YearSuffix(n *types.Normalizer) string {
 	if !config.KEEP_YEAR || n.Year == "" {
-		return n.Title
+		return ""
 	}
-	return n.Title + " (" + n.Year + ")"
+	return " - " + n.Year
 }

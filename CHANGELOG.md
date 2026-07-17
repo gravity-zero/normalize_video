@@ -9,12 +9,14 @@ follows [Semantic Versioning](https://semver.org/).
 ### Added
 
 - **`--keep-year`** (off by default): the year found in the release name is
-  kept in the normalized one - `Dune (1984) - 1080P.mkv` - the form a media
-  server reads to tell two films of the same name apart. The year is a marker
-  the title is cut on, so it is dropped by default; a year that IS the title
-  (`2012`, `1917`) is kept either way and never duplicated into `2012 (2012)`
-  - the release year of such a film is the next year token along. The flag
-  only changes the filename; the title written inside the MKV stays bare.
+  kept in the normalized one - `Dune - 1984 - 1080P.mkv` - a way to tell two
+  films of the same name apart. On a series it goes after the season/episode,
+  not glued to the title: `The sentinel S04E02 - 2008 - VF - 1080P.mkv`. The
+  year is a marker the title is cut on, so it is dropped by default; a year
+  that IS the title (`2012`, `1917`) is kept either way and never duplicated
+  into `2012 - 2012` - the release year of such a film is the next year token
+  along. The flag only changes the filename; the title written inside the MKV
+  stays bare.
 
 ### Fixed
 

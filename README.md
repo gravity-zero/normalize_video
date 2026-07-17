@@ -90,7 +90,7 @@ everything else is overridable from the command line:
                          whatever the name/metadata/track order) is already in
                          the library - report-only, implies --hashes (default off)
   --keep-year            keep the year in the normalized name:
-                         "Dune (1984) - 1080P.mkv"                   (default off)
+                         "Dune - 1984 - 1080P.mkv"                   (default off)
 ```
 
 ### Naming
@@ -99,9 +99,11 @@ The title is everything before the first structural marker in the release name
 - the year, the quality, the `SxxEyy` - and the rest (release group, codec,
 source, container junk) is dropped. The year is one of those markers, so it is
 dropped with them, *unless* it IS the title (`2012`, `1917`), which is kept.
-`--keep-year` puts it back in the name instead: `Dune (1984) - 1080P.mkv`, the
-form a media server reads to tell two films of the same name apart. It only
-changes the filename; the title written inside the MKV stays bare.
+`--keep-year` puts it back in the name instead - `Dune - 1984 - 1080P.mkv`, the
+form telling two films of the same name apart. On a series it goes after the
+season/episode, not glued to the title: `The sentinel S04E02 - 2008 - VF -
+1080P.mkv`. It only changes the filename; the title written inside the MKV
+stays bare.
 
 The language is recognised from the known release tags (`config/languages.go`:
 `vf`, `vostfr`, `multi`, `truefrench`, `french`, ...), not by parsing any short
